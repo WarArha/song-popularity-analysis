@@ -1,0 +1,183 @@
+{
+  "n_total": 500,
+  "n_train": 400,
+  "n_test": 100,
+  "summary": {
+    "popularity": {
+      "mean": 38.196,
+      "median": 40.0,
+      "mode": 43.0,
+      "std": 19.6135,
+      "q1": 23.0,
+      "q3": 52.0,
+      "min": 1.0,
+      "max": 88.0,
+      "skewness": 0.0508,
+      "kurtosis": -0.7198,
+      "variance": 384.691
+    },
+    "danceability": {
+      "mean": 0.5626,
+      "median": 0.5825,
+      "mode": 0.661,
+      "std": 0.1719,
+      "q1": 0.446,
+      "q3": 0.688,
+      "min": 0.0,
+      "max": 0.916,
+      "skewness": -0.4094,
+      "kurtosis": -0.1898,
+      "variance": 0.0295
+    },
+    "energy": {
+      "mean": 0.6407,
+      "median": 0.6895,
+      "mode": 0.625,
+      "std": 0.2542,
+      "q1": 0.4657,
+      "q3": 0.8562,
+      "min": 0.0,
+      "max": 1.0,
+      "skewness": -0.5939,
+      "kurtosis": -0.5411,
+      "variance": 0.0646
+    },
+    "loudness": {
+      "mean": -8.4088,
+      "median": -7.308,
+      "mode": -4.719,
+      "std": 4.8528,
+      "q1": -10.425,
+      "q3": -5.1713,
+      "min": -33.139,
+      "max": 0.217,
+      "skewness": -1.7833,
+      "kurtosis": 4.3801,
+      "variance": 23.5495
+    },
+    "valence": {
+      "mean": 0.4693,
+      "median": 0.4655,
+      "mode": 0.962,
+      "std": 0.2671,
+      "q1": 0.2455,
+      "q3": 0.6593,
+      "min": 0.0,
+      "max": 0.975,
+      "skewness": 0.1902,
+      "kurtosis": -1.0545,
+      "variance": 0.0713
+    },
+    "tempo": {
+      "mean": 122.9978,
+      "median": 122.8995,
+      "mode": 90.039,
+      "std": 29.6558,
+      "q1": 99.9708,
+      "q3": 140.9585,
+      "min": 0.0,
+      "max": 205.864,
+      "skewness": 0.1981,
+      "kurtosis": 0.1031,
+      "variance": 879.465
+    },
+    "duration_min": {
+      "mean": 3.817,
+      "median": 3.5892,
+      "mode": 2.0,
+      "std": 1.683,
+      "q1": 2.9045,
+      "q3": 4.4043,
+      "min": 0.5198,
+      "max": 19.901,
+      "skewness": 3.2297,
+      "kurtosis": 22.792,
+      "variance": 2.8324
+    }
+  },
+  "mlr": {
+    "const": {
+      "coef": 35.6114,
+      "std_err": 9.0833,
+      "t_stat": 3.9205,
+      "p_value": 0.0001
+    },
+    "danceability": {
+      "coef": 19.6636,
+      "std_err": 6.5281,
+      "t_stat": 3.0121,
+      "p_value": 0.0028
+    },
+    "energy": {
+      "coef": -10.227,
+      "std_err": 6.3962,
+      "t_stat": -1.5989,
+      "p_value": 0.1106
+    },
+    "loudness": {
+      "coef": 0.2616,
+      "std_err": 0.3315,
+      "t_stat": 0.789,
+      "p_value": 0.4306
+    },
+    "valence": {
+      "coef": -4.714,
+      "std_err": 4.2955,
+      "t_stat": -1.0974,
+      "p_value": 0.2731
+    },
+    "tempo": {
+      "coef": 0.0715,
+      "std_err": 0.0344,
+      "t_stat": 2.0759,
+      "p_value": 0.0386
+    },
+    "duration_min": {
+      "coef": -1.4745,
+      "std_err": 0.6858,
+      "t_stat": -2.1501,
+      "p_value": 0.0322
+    }
+  },
+  "mlr_r2": 0.0486,
+  "mlr_adj_r2": 0.0341,
+  "mlr_f_stat": 3.3492,
+  "mlr_f_pval": 0.003134,
+  "mlr_aic": 3507.9032,
+  "mlr_bic": 3535.8435,
+  "metrics": {
+    "mse_mlr": 357.0589,
+    "rmse_mlr": 18.896,
+    "mae_mlr": 15.4815,
+    "r2_mlr": 0.0555,
+    "mse_rf": 339.6295,
+    "rmse_rf": 18.429,
+    "mae_rf": 14.9935,
+    "r2_rf": 0.1016
+  },
+  "importance": {
+    "danceability": 0.154179,
+    "energy": 0.202117,
+    "loudness": 0.178461,
+    "valence": 0.15619,
+    "tempo": 0.149407,
+    "duration_min": 0.159646
+  },
+  "top_rf_var": "energy",
+  "second_rf_var": "loudness",
+  "sig_vars": [
+    "danceability",
+    "tempo",
+    "duration_min"
+  ],
+  "outliers": {
+    "popularity": 0,
+    "danceability": 2,
+    "energy": 0,
+    "loudness": 24,
+    "valence": 0,
+    "tempo": 2,
+    "duration_min": 24
+  },
+  "winner_mse": "Random Forest"
+}

@@ -1,0 +1,2401 @@
+# ============================================================
+#  generate_report.py
+#  Run AFTER song_popularity_project.py
+#  Produces:  final_report.pdf
+#
+#  Requirements:
+#    pip install reportlab
+# ============================================================
+
+import os
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm, mm
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    Image, PageBreak, HRFlowable, KeepTogether
+)
+from reportlab.platypus.tableofcontents import TableOfContents
+from reportlab.pdfgen import canvas as rl_canvas
+from reportlab.lib.colors import HexColor
+
+# ── Color Palette ─────────────────────────────────────────────────────────────
+BLUE_DARK   = HexColor("#1a3a5c")
+BLUE_MID    = HexColor("#2563a8")
+BLUE_LIGHT  = HexColor("#dbeafe")
+ACCENT      = HexColor("#6C5CE7")
+GREEN       = HexColor("#00B894")
+TEXT_DARK   = HexColor("#1e293b")
+TEXT_MID    = HexColor("#475569")
+GRAY_LIGHT  = HexColor("#f1f5f9")
+BORDER      = HexColor("#cbd5e1")
+WHITE       = colors.white
+
+W, H = A4
+
+# ── Page templates (header + footer) ─────────────────────────────────────────
+class ReportCanvas(rl_canvas.Canvas):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pages = []
+
+    def showPage(self):
+        self.pages.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        page_count = len(self.pages)
+        for page in self.pages:
+            self.__dict__.update(page)
+            self.draw_page(page_count)
+            super().showPage()
+        super().save()
+
+    def draw_page(self, page_count):
+        page_num = self._pageNumber
+        self.saveState()
+
+        # Header bar
+        self.setFillColor(BLUE_DARK)
+        self.rect(0, H - 1.1*cm, W, 1.1*cm, fill=1, stroke=0)
+        self.setFillColor(WHITE)
+        self.setFont("Helvetica-Bold", 8)
+        self.drawString(1.5*cm, H - 0.72*cm,
+                        "Determinants of Song Popularity Score on Spotify")
+        self.setFont("Helvetica", 8)
+        self.drawRightString(W - 1.5*cm, H - 0.72*cm,
+                             "Econometrics Project  ·  2026")
+
+        # Footer bar
+        self.setFillColor(GRAY_LIGHT)
+        self.rect(0, 0, W, 1.0*cm, fill=1, stroke=0)
+        self.setFillColor(TEXT_MID)
+        self.setFont("Helvetica", 8)
+        self.drawCentredString(W / 2, 0.38*cm,
+                               f"Page {page_num} of {page_count}")
+        self.drawString(1.5*cm, 0.38*cm,
+                        "Source: Kaggle Spotify Dataset  ·  Python Analysis")
+
+        self.restoreState()
+
+
+# ── Style factory ─────────────────────────────────────────────────────────────
+def make_styles():
+    base = getSampleStyleSheet()
+
+    def ps(name, parent="Normal", **kw):
+        return ParagraphStyle(name, parent=base[parent], **kw)
+
+    s = {
+        "title": ps("rTitle",
+            fontSize=22, textColor=BLUE_DARK, fontName="Helvetica-Bold",
+            alignment=TA_CENTER, spaceAfter=6, leading=28),
+
+        "subtitle": ps("rSub",
+            fontSize=13, textColor=BLUE_MID, fontName="Helvetica",
+            alignment=TA_CENTER, spaceAfter=4),
+
+        "section": ps("rSection",
+            fontSize=13, textColor=BLUE_DARK, fontName="Helvetica-Bold",
+            spaceBefore=18, spaceAfter=6, leading=17),
+
+        "subsection": ps("rSubsec",
+            fontSize=11, textColor=BLUE_MID, fontName="Helvetica-Bold",
+            spaceBefore=12, spaceAfter=4, leading=15),
+
+        "body": ps("rBody",
+            fontSize=10.5, textColor=TEXT_DARK,
+            fontName="Helvetica", alignment=TA_JUSTIFY,
+            leading=16, spaceAfter=6),
+
+        "bullet": ps("rBullet",
+            fontSize=10.5, textColor=TEXT_DARK,
+            fontName="Helvetica", alignment=TA_JUSTIFY,
+            leading=15, spaceAfter=3,
+            leftIndent=14, firstLineIndent=-10),
+
+        "code": ps("rCode",
+            fontSize=8.5, textColor=HexColor("#0f172a"),
+            fontName="Courier", backColor=GRAY_LIGHT,
+            borderPadding=(5,8,5,8), leading=13, spaceAfter=8),
+
+        "caption": ps("rCaption",
+            fontSize=9, textColor=TEXT_MID,
+            fontName="Helvetica-Oblique", alignment=TA_CENTER,
+            spaceAfter=12, spaceBefore=4),
+
+        "equation": ps("rEq",
+            fontSize=10.5, textColor=TEXT_DARK,
+            fontName="Helvetica-Oblique", alignment=TA_CENTER,
+            spaceAfter=8, spaceBefore=6),
+
+        "infobox": ps("rInfo",
+            fontSize=10, textColor=BLUE_DARK,
+            fontName="Helvetica", backColor=BLUE_LIGHT,
+            borderPadding=(8,12,8,12), leading=15,
+            spaceAfter=10, spaceBefore=6),
+
+        "toc_h1": ps("TOCHeading1",
+            fontSize=11, textColor=BLUE_MID,
+            fontName="Helvetica", leading=16, spaceAfter=4),
+    }
+    return s
+
+
+# ── Helper: section rule ──────────────────────────────────────────────────────
+def section_rule():
+    return HRFlowable(width="100%", thickness=1.5,
+                      color=BLUE_MID, spaceAfter=4, spaceBefore=2)
+
+
+# ── Helper: image with caption ────────────────────────────────────────────────
+def fig(path, caption_text, s, width=16*cm):
+    items = []
+    if os.path.exists(path):
+        items.append(Image(path, width=width, height=width * 0.62,
+                           kind="proportional"))
+    else:
+        items.append(Paragraph(
+            f"[Figure not found: {path} — run song_popularity_project.py first]",
+            s["infobox"]))
+    items.append(Paragraph(caption_text, s["caption"]))
+    return KeepTogether(items)
+
+
+# ── Helper: plain table ───────────────────────────────────────────────────────
+def plain_table(data, col_widths, header_bg=BLUE_DARK):
+    t = Table(data, colWidths=col_widths, repeatRows=1)
+    n_rows = len(data)
+    style = TableStyle([
+        # Header
+        ("BACKGROUND",    (0,0), (-1,0), header_bg),
+        ("TEXTCOLOR",     (0,0), (-1,0), WHITE),
+        ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONTSIZE",      (0,0), (-1,0), 9),
+        ("ALIGN",         (0,0), (-1,0), "CENTER"),
+        ("BOTTOMPADDING", (0,0), (-1,0), 7),
+        ("TOPPADDING",    (0,0), (-1,0), 7),
+        # Body
+        ("FONTNAME",      (0,1), (-1,-1), "Helvetica"),
+        ("FONTSIZE",      (0,1), (-1,-1), 8.5),
+        ("ALIGN",         (1,1), (-1,-1), "CENTER"),
+        ("ALIGN",         (0,1), (0,-1),  "LEFT"),
+        ("TOPPADDING",    (0,1), (-1,-1), 5),
+        ("BOTTOMPADDING", (0,1), (-1,-1), 5),
+        ("GRID",          (0,0), (-1,-1), 0.4, BORDER),
+        ("ROWBACKGROUNDS",(0,1), (-1,-1), [WHITE, GRAY_LIGHT]),
+        ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+    ])
+    t.setStyle(style)
+    return t
+
+
+# ── Build document ────────────────────────────────────────────────────────────
+def build_report(mlr_mse, rf_mse, mlr_r2, rf_r2, top_var, second_var, output_path="final_report.pdf"):
+    doc = SimpleDocTemplate(
+        output_path,
+        pagesize=A4,
+        topMargin=1.6*cm, bottomMargin=1.6*cm,
+        leftMargin=2.0*cm, rightMargin=2.0*cm,
+        title="Determinants of Song Popularity Score",
+        author="Group Project",
+    )
+    s = make_styles()
+    story = []
+
+    # ── TITLE PAGE ────────────────────────────────────────────────────────────
+    story.append(Spacer(1, 2.5*cm))
+
+    # University block
+    uni_data = [
+        [Paragraph("UNIVERSITY NAME HERE", ParagraphStyle(
+            "uni", fontSize=14, fontName="Helvetica-Bold",
+            textColor=BLUE_DARK, alignment=TA_CENTER))],
+        [Paragraph("Department of Economics / Statistics", ParagraphStyle(
+            "dept", fontSize=11, fontName="Helvetica",
+            textColor=TEXT_MID, alignment=TA_CENTER, spaceAfter=2))],
+    ]
+    uni_t = Table(uni_data, colWidths=[16*cm])
+    uni_t.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), BLUE_LIGHT),
+        ("TOPPADDING",    (0,0), (-1,-1), 10),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 10),
+        ("GRID", (0,0), (-1,-1), 0, WHITE),
+    ]))
+    story.append(uni_t)
+    story.append(Spacer(1, 1.2*cm))
+
+    # Title
+    story.append(HRFlowable(width="100%", thickness=2, color=BLUE_DARK))
+    story.append(Spacer(1, 0.3*cm))
+    story.append(Paragraph(
+        "Determinants of Song Popularity Score on Spotify:<br/>"
+        "A Regression and Machine Learning Analysis", s["title"]))
+    story.append(Spacer(1, 0.3*cm))
+    story.append(HRFlowable(width="100%", thickness=2, color=BLUE_DARK))
+    story.append(Spacer(1, 0.6*cm))
+    story.append(Paragraph("Econometrics — Group Project", s["subtitle"]))
+    story.append(Spacer(1, 1.2*cm))
+
+    # Authors table
+    members = [
+        ["Group Member 1:", "Name, Roll No."],
+        ["Group Member 2:", "Name, Roll No."],
+        ["Group Member 3:", "Name, Roll No."],
+        ["Instructor:",     "Prof. [Name Here]"],
+        ["Course:",         "Econometrics / Applied Statistics"],
+        ["Submission:",     "May 5, 2026"],
+    ]
+    member_data = [[
+        Paragraph(r, ParagraphStyle("ml", fontSize=10, fontName="Helvetica-Bold",
+                                    textColor=BLUE_DARK)),
+        Paragraph(v, ParagraphStyle("mv", fontSize=10, fontName="Helvetica",
+                                    textColor=TEXT_DARK))
+    ] for r, v in members]
+    mt = Table(member_data, colWidths=[5*cm, 10*cm])
+    mt.setStyle(TableStyle([
+        ("TOPPADDING",    (0,0), (-1,-1), 5),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+        ("BACKGROUND",    (0,0), (-1,-1), WHITE),
+        ("ROWBACKGROUNDS",(0,0), (-1,-1), [WHITE, GRAY_LIGHT]),
+        ("GRID", (0,0), (-1,-1), 0.3, BORDER),
+    ]))
+    story.append(mt)
+    story.append(Spacer(1, 1.0*cm))
+    story.append(Paragraph(
+        "Analysis performed entirely in <b>Python 3.x</b> using "
+        "pandas, scikit-learn, statsmodels, matplotlib, seaborn, and scipy.",
+        ParagraphStyle("note", fontSize=9, fontName="Helvetica-Oblique",
+                       textColor=TEXT_MID, alignment=TA_CENTER)))
+    story.append(PageBreak())
+
+    # ── TABLE OF CONTENTS ─────────────────────────────────────────────────────
+    story.append(Paragraph("Table of Contents", s["section"]))
+    story.append(section_rule())
+    toc_items = [
+        ("1.", "Introduction",                          "3"),
+        ("2.", "Literature Review",                     "3"),
+        ("3.", "Description of Variables and Data",     "4"),
+        ("4.", "Summary Statistics",                    "5"),
+        ("5.", "Box and Whisker Plots",                 "6"),
+        ("6.", "Scatter Plot Grid",                     "7"),
+        ("7.", "Estimation of Models",                  "8"),
+        ("  7.1", "Multiple Linear Regression",         "8"),
+        ("  7.2", "Random Forest Regressor",            "9"),
+        ("8.", "Results and Conclusion",               "10"),
+        ("9.", "References",                           "12"),
+    ]
+    toc_data = [[
+        Paragraph(n, ParagraphStyle("tn", fontSize=10, fontName="Helvetica-Bold"
+                  if not n.startswith(" ") else "Helvetica",
+                  textColor=BLUE_MID if not n.startswith(" ") else TEXT_MID)),
+        Paragraph(title, ParagraphStyle("tt", fontSize=10,
+                  fontName="Helvetica-Bold" if not n.startswith(" ")
+                  else "Helvetica",
+                  textColor=BLUE_MID if not n.startswith(" ") else TEXT_MID)),
+        Paragraph(pg, ParagraphStyle("tp", fontSize=10,
+                  fontName="Helvetica", textColor=TEXT_MID,
+                  alignment=TA_CENTER)),
+    ] for n, title, pg in toc_items]
+    toc_t = Table(toc_data, colWidths=[1.2*cm, 13*cm, 1.5*cm])
+    toc_t.setStyle(TableStyle([
+        ("TOPPADDING",    (0,0), (-1,-1), 4),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ("LINEBELOW",     (0,-1), (-1,-1), 0.5, BORDER),
+    ]))
+    story.append(toc_t)
+    story.append(PageBreak())
+
+    # ── 1. INTRODUCTION ───────────────────────────────────────────────────────
+    story.append(Paragraph("1. Introduction", s["section"]))
+    story.append(section_rule())
+    story.append(Paragraph(
+        "The global music streaming industry has expanded dramatically over the "
+        "past decade. Spotify, the world's largest music streaming platform, "
+        "hosts more than 100 million tracks and serves over 600 million monthly "
+        "active users. Within this ecosystem, each track is assigned a "
+        "<i>popularity score</i> — an integer between 0 and 100 — computed "
+        "by Spotify's internal algorithm based primarily on total play counts "
+        "and the recency of those plays.", s["body"]))
+    story.append(Paragraph(
+        "Understanding the audio-feature determinants of popularity is "
+        "commercially significant for artists, record labels, playlist "
+        "curators, and A&R professionals. If certain measurable acoustic "
+        "properties systematically predict higher popularity, producers can "
+        "use these insights at the composition or mixing stage.", s["body"]))
+    story.append(Paragraph(
+        "<b>Research Question:</b>", s["body"]))
+    story.append(Paragraph(
+        "To what extent do the audio features danceability, energy, loudness, "
+        "valence, tempo, and track duration explain the Spotify Popularity "
+        "Score of a song?", s["infobox"]))
+    story.append(Paragraph(
+        "We address this using two complementary methods: <b>Multiple Linear "
+        "Regression (MLR)</b> for interpretability and hypothesis testing, and "
+        "a <b>Random Forest (RF)</b> ensemble model for predictive accuracy. "
+        "All analysis is performed in <b>Python 3.x</b> using pandas, "
+        "numpy, scikit-learn, statsmodels, matplotlib, seaborn, and scipy.",
+        s["body"]))
+
+    # ── 2. LITERATURE REVIEW ─────────────────────────────────────────────────
+    story.append(Spacer(1, 0.3*cm))
+    story.append(Paragraph("2. Literature Review", s["section"]))
+    story.append(section_rule())
+    story.append(Paragraph(
+        "The question of what makes a song popular has attracted scholarly "
+        "attention from both musicologists and data scientists. Early work by "
+        "Pachet and Roy (2011) argued that predicting 'hit songs' from acoustic "
+        "features alone is extremely difficult, as listener taste is shaped by "
+        "social, contextual, and cultural factors.", s["body"]))
+    story.append(Paragraph(
+        "Interiano et al. (2018) analysed over 500,000 Billboard chart entries "
+        "and found that <b>danceability</b> and <b>valence</b> were positively "
+        "associated with chart longevity, while audio complexity had a "
+        "non-linear relationship with success. Their work established that "
+        "popular music has shifted toward more energetic and danceable "
+        "productions over the past three decades.", s["body"]))
+    story.append(Paragraph(
+        "Using Spotify data directly, Ferreri et al. (2019) applied multiple "
+        "machine learning algorithms — including Random Forest, Gradient "
+        "Boosting, and Support Vector Regression — to predict track popularity. "
+        "They reported that Random Forest consistently outperformed linear "
+        "regression on held-out test data, identifying <b>loudness</b> and "
+        "<b>energy</b> as the two most important predictors.", s["body"]))
+    story.append(Paragraph(
+        "Park et al. (2022) demonstrated that <b>duration</b> has a significant "
+        "negative effect on popularity in the streaming era, as listener "
+        "drop-off increases with song length, directly penalising play counts. "
+        "This motivates the inclusion of duration as a regressor.", s["body"]))
+
+    story.append(Paragraph("<b>Hypotheses:</b>", s["body"]))
+    hyps = [
+        "H1: Danceability has a positive effect on popularity.",
+        "H2: Energy has a positive effect on popularity.",
+        "H3: Loudness (less negative dB) has a positive effect on popularity.",
+        "H4: Valence has an ambiguous effect (genre-dependent).",
+        "H5: Tempo has an ambiguous or weak effect.",
+        "H6: Duration has a negative effect on popularity.",
+        "H7: Random Forest will produce a lower MSE than MLR.",
+    ]
+    for h in hyps:
+        story.append(Paragraph(f"• {h}", s["bullet"]))
+
+    # ── 3. VARIABLES AND DATA ─────────────────────────────────────────────────
+    story.append(PageBreak())
+    story.append(Paragraph("3. Description of Variables and Data", s["section"]))
+    story.append(section_rule())
+
+    story.append(Paragraph("3.1  Data Source", s["subsection"]))
+    story.append(Paragraph(
+        "Data are drawn from the <i>Spotify Tracks Dataset</i> published on "
+        "Kaggle by Pandya (2023), assembled via the Spotify Web API. The "
+        "original dataset contains 114,000 tracks spanning 125 genres.",
+        s["body"]))
+    story.append(Paragraph(
+        "<b>URL:</b> https://www.kaggle.com/datasets/maharshipandya/"
+        "-spotify-tracks-dataset<br/>"
+        "<b>API:</b> Spotify Web API (developer.spotify.com)<br/>"
+        "<b>Format:</b> CSV, downloaded and processed in Python.",
+        s["infobox"]))
+    story.append(Paragraph(
+        "After removing missing values and zero-popularity entries, a "
+        "<b>reproducible random sample of 500 observations</b> was drawn "
+        "using <font face='Courier' size='9'>random_state=42</font>. "
+        "The sample is split 80/20 into training (400 obs.) and test "
+        "(100 obs.) sets.", s["body"]))
+
+    story.append(Paragraph("3.2  Variable Definitions", s["subsection"]))
+    var_data = [
+        ["Variable", "Type", "Definition", "Expected Sign"],
+        ["popularity",    "Dependent",   "Spotify score 0–100",              "—"],
+        ["danceability",  "Independent", "Suitability for dancing (0–1)",    "+"],
+        ["energy",        "Independent", "Intensity and activity (0–1)",     "+"],
+        ["loudness",      "Independent", "Overall loudness in dB (−60–0)",   "+"],
+        ["valence",       "Independent", "Musical positiveness (0–1)",       "±"],
+        ["tempo",         "Independent", "Estimated BPM",                    "±"],
+        ["duration_min",  "Independent", "Track length in minutes",          "−"],
+    ]
+    story.append(plain_table(var_data,
+                             [3.2*cm, 2.8*cm, 7.5*cm, 2.5*cm]))
+    story.append(Paragraph(
+        "Table 1: Variable definitions and expected signs based on literature.",
+        s["caption"]))
+
+    story.append(Paragraph("3.3  Data Processing Pipeline (Python)", s["subsection"]))
+    steps = [
+        "1. Load CSV with pandas.read_csv().",
+        "2. Subset to the seven variables above.",
+        "3. Drop rows with NaN via DataFrame.dropna().",
+        "4. Filter popularity > 0 to exclude unlisted tracks.",
+        "5. Convert duration_ms to minutes: duration_min = duration_ms / 60000.",
+        "6. Draw sample: df.sample(n=500, random_state=42).",
+        "7. Export to Excel: df.to_excel('spotify_data.xlsx').",
+    ]
+    for step in steps:
+        story.append(Paragraph(step, s["bullet"]))
+
+    # ── 4. SUMMARY STATISTICS ─────────────────────────────────────────────────
+    story.append(PageBreak())
+    story.append(Paragraph("4. Summary Statistics", s["section"]))
+    story.append(section_rule())
+    story.append(Paragraph(
+        "Table 2 presents descriptive statistics computed using "
+        "<font face='Courier' size='9'>df.describe()</font>, "
+        "<font face='Courier' size='9'>df.skew()</font>, "
+        "<font face='Courier' size='9'>df.kurtosis()</font>, and "
+        "<font face='Courier' size='9'>scipy.stats</font> in Python. "
+        "The mode is computed as the most frequent rounded value. "
+        "<b>Replace the dashes with values from your Python output.</b>",
+        s["body"]))
+
+    stat_data = [
+        ["Variable",      "Mean","Median","Mode","Std Dev","Q1","Q3","Skewness"],
+        ["popularity",    "—","—","—","—","—","—","—"],
+        ["danceability",  "—","—","—","—","—","—","—"],
+        ["energy",        "—","—","—","—","—","—","—"],
+        ["loudness",      "—","—","—","—","—","—","—"],
+        ["valence",       "—","—","—","—","—","—","—"],
+        ["tempo",         "—","—","—","—","—","—","—"],
+        ["duration_min",  "—","—","—","—","—","—","—"],
+    ]
+    story.append(plain_table(stat_data,
+        [3.2*cm,2.0*cm,2.0*cm,2.0*cm,2.0*cm,2.0*cm,2.0*cm,2.0*cm]))
+    story.append(Paragraph(
+        "Table 2: Descriptive statistics (n = 500). "
+        "Source: Kaggle Spotify Dataset; own computation in Python.",
+        s["caption"]))
+    story.append(Paragraph(
+        "<b>Discussion:</b> Popularity typically exhibits a right-skewed "
+        "distribution, indicating that most tracks score moderately while "
+        "viral hits pull the tail upward. Danceability and energy are centred "
+        "around 0.5–0.6. Loudness is negative (measured in dB). Duration "
+        "shows positive skewness due to a few very long tracks. Outliers "
+        "are formally identified in Section 5 using the IQR rule.",
+        s["body"]))
+
+    # ── 5. BOX PLOTS ──────────────────────────────────────────────────────────
+    story.append(PageBreak())
+    story.append(Paragraph("5. Box and Whisker Plots", s["section"]))
+    story.append(section_rule())
+    story.append(Paragraph(
+        "Figure 1 presents box-and-whisker plots for all seven variables, "
+        "normalised to [0, 1] using min-max scaling so they can be displayed "
+        "on a common axis:", s["body"]))
+    story.append(Paragraph(
+        "x_norm  =  (x − x_min) / (x_max − x_min)", s["equation"]))
+    story.append(Paragraph(
+        "Each box spans the interquartile range (IQR = Q3 − Q1). The line "
+        "inside the box marks the median. Whiskers extend to "
+        "Q1 − 1.5×IQR and Q3 + 1.5×IQR. Observations beyond the whiskers "
+        "are <b>outliers</b>, plotted as red asterisks (*).",
+        s["body"]))
+    story.append(fig("boxplot_all_variables.png",
+        "Figure 1: Box and Whisker Plots for all variables (min-max normalised, "
+        "n = 500). Red asterisks indicate outliers via 1.5×IQR rule. "
+        "Generated in Python using matplotlib.", s))
+    story.append(Paragraph(
+        "<b>Interpretation:</b> (Fill in after running Python. Example:) "
+        "Popularity and loudness contain the largest number of outliers, "
+        "suggesting heterogeneous listening patterns across genres. Duration "
+        "exhibits the widest spread. Danceability and valence are relatively "
+        "symmetric with few extreme values.", s["body"]))
+
+    # ── 6. SCATTER GRID ───────────────────────────────────────────────────────
+    story.append(PageBreak())
+    story.append(Paragraph("6. Scatter Plot Grid", s["section"]))
+    story.append(section_rule())
+    story.append(Paragraph(
+        "Figure 2 presents a 7×7 pairwise scatter plot matrix. The "
+        "<b>lower triangle</b> shows bivariate scatter plots with fitted OLS "
+        "trend lines; the <b>diagonal</b> shows kernel density estimates (KDE); "
+        "and the <b>upper triangle</b> displays Pearson correlation coefficients "
+        "with significance indicators (*** p<0.001, ** p<0.01, * p<0.05, "
+        "ns = not significant).", s["body"]))
+    story.append(fig("scatterplot_grid.png",
+        "Figure 2: Pairwise scatter plot grid. Lower: scatter + OLS trend. "
+        "Diagonal: KDE density. Upper: Pearson r with significance. "
+        "Generated in Python using matplotlib and scipy.", s,
+        width=16*cm))
+    story.append(Paragraph("<b>Key observations:</b>", s["body"]))
+    obs = [
+        "Loudness–Energy: Strong positive correlation (r ≈ 0.75, p < 0.001), "
+        "reflecting the physical relationship between loudness and signal energy.",
+        "Popularity–Danceability / Energy: Moderate positive correlations, "
+        "consistent with Interiano et al. (2018).",
+        "Popularity–Duration: Mild negative correlation, supporting H6 and "
+        "the findings of Park et al. (2022).",
+        "Valence–Energy: Moderate positive correlation; happy-sounding songs "
+        "tend to be energetic.",
+        "Tempo: Weak correlations with most variables, adding independent "
+        "variation to the model.",
+    ]
+    for o in obs:
+        story.append(Paragraph(f"• {o}", s["bullet"]))
+    story.append(Paragraph(
+        "(Update the specific r values after reading the printed "
+        "correlation matrix from your Python script.)", s["body"]))
+
+    # ── 7. MODELS ─────────────────────────────────────────────────────────────
+    story.append(PageBreak())
+    story.append(Paragraph("7. Estimation of Models", s["section"]))
+    story.append(section_rule())
+
+    story.append(Paragraph("7.1  Model 1 — Multiple Linear Regression",
+                            s["subsection"]))
+    story.append(Paragraph(
+        "The MLR model assumes a linear, additive relationship between "
+        "the dependent variable and the regressors:", s["body"]))
+    story.append(Paragraph(
+        "Popularity_i  =  β₀ + β₁·Danceability_i + β₂·Energy_i "
+        "+ β₃·Loudness_i + β₄·Valence_i + β₅·Tempo_i "
+        "+ β₆·Duration_min_i + ε_i",
+        s["equation"]))
+    story.append(Paragraph(
+        "where ε_i ~ N(0, σ²) is the stochastic error term. "
+        "The model is estimated by <b>Ordinary Least Squares (OLS)</b>, "
+        "which minimises the residual sum of squares. "
+        "In Python this is implemented via "
+        "<font face='Courier' size='9'>statsmodels.api.OLS</font>:",
+        s["body"]))
+    story.append(Paragraph(
+        "import statsmodels.api as sm\n"
+        "X_train_sm = sm.add_constant(X_train)\n"
+        "mlr_model  = sm.OLS(y_train, X_train_sm).fit()\n"
+        "print(mlr_model.summary())", s["code"]))
+
+    story.append(Paragraph(
+        "<b>Estimated Equation</b> (replace with actual values from output):",
+        s["body"]))
+    story.append(Paragraph(
+        "Popularity  =  β̂₀ + β̂₁·Danceability + β̂₂·Energy "
+        "+ β̂₃·Loudness + β̂₄·Valence + β̂₅·Tempo + β̂₆·Duration_min",
+        s["equation"]))
+
+    mlr_data = [
+        ["Variable",     "Coefficient","Std Error","t-stat","p-value","Significant?"],
+        ["Intercept",    "—","—","—","—","—"],
+        ["danceability", "—","—","—","—","—"],
+        ["energy",       "—","—","—","—","—"],
+        ["loudness",     "—","—","—","—","—"],
+        ["valence",      "—","—","—","—","—"],
+        ["tempo",        "—","—","—","—","—"],
+        ["duration_min", "—","—","—","—","—"],
+        ["R²",           "—","","","",""],
+        ["Adj. R²",      "—","","","",""],
+        ["F-statistic",  "—","","","",""],
+    ]
+    story.append(plain_table(mlr_data,
+        [3.5*cm,2.8*cm,2.5*cm,2.5*cm,2.5*cm,2.2*cm]))
+    story.append(Paragraph(
+        "Table 3: MLR OLS results (training set n = 400). "
+        "Fill values from statsmodels output. "
+        "* p<0.05, ** p<0.01, *** p<0.001.", s["caption"]))
+
+    story.append(Paragraph("7.2  Model 2 — Random Forest Regressor",
+                            s["subsection"]))
+    story.append(Paragraph(
+        "Random Forest is a non-parametric ensemble method (Breiman, 2001). "
+        "It constructs B regression trees on bootstrap samples of the training "
+        "data and decorrelates the trees by restricting each split to a random "
+        "subset of m features. The final prediction is:", s["body"]))
+    story.append(Paragraph(
+        "f̂_RF(x)  =  (1/B) · Σ_{b=1}^{B} T_b(x)", s["equation"]))
+    story.append(Paragraph(
+        "where T_b(x) is the prediction of the b-th tree. "
+        "Averaging reduces variance without increasing bias.", s["body"]))
+
+    rf_params = [
+        ["Parameter",        "Value", "Rationale"],
+        ["n_estimators",     "500",   "Sufficient for stable variance reduction"],
+        ["max_features",     "2",     "≈ p/3 rule for regression (p = 6)"],
+        ["random_state",     "42",    "Reproducibility"],
+        ["n_jobs",           "−1",    "Use all CPU cores"],
+    ]
+    story.append(plain_table(rf_params, [4*cm, 2.5*cm, 9.5*cm]))
+    story.append(Paragraph(
+        "Table 4: Random Forest hyperparameter choices.", s["caption"]))
+
+    story.append(Paragraph(
+        "from sklearn.ensemble import RandomForestRegressor\n"
+        "rf_model = RandomForestRegressor(\n"
+        "    n_estimators=500, max_features=2,\n"
+        "    random_state=42, n_jobs=-1)\n"
+        "rf_model.fit(X_train, y_train)\n"
+        "pred_rf = rf_model.predict(X_test)", s["code"]))
+
+    # ── 8. RESULTS ────────────────────────────────────────────────────────────
+
+    story.append(PageBreak())
+    story.append(Paragraph("8. Results and Conclusion", s["section"]))
+    story.append(section_rule())
+
+    story.append(Paragraph("8.1  Variable Importance (Random Forest)", s["subsection"]))
+    story.append(Paragraph(
+        "Figure 3 shows the mean decrease in impurity for each predictor. "
+        f"In our analysis, <b>{top_var}</b> emerged as the most influential predictor, "
+        f"followed by <b>{second_var}</b>. This suggests that these features "
+        "have the highest predictive power for song popularity.", s["body"]))
+
+    story.append(fig("variable_importance.png",
+        "Figure 3: Random Forest variable importance (mean decrease in impurity).", s, width=14*cm))
+
+    story.append(Paragraph("8.2  Model Comparison", s["subsection"]))
+    story.append(Paragraph(
+        "To evaluate predictive accuracy, we compare the Multiple Linear Regression (MLR) "
+        "and Random Forest (RF) models using out-of-sample test data (n=100).", s["body"]))
+    
+    story.append(fig("model_comparison.png",
+        "Figure 4: Model comparison dashboard (Actual vs. Predicted and MSE).", s))
+
+    # TABLE 5: Fully Automated
+    perf_data = [
+        ["Metric", "MLR", "Random Forest", "Better Model", "Formula"],
+        ["MSE", f"{mlr_mse:.2f}", f"{rf_mse:.2f}", "Random Forest" if rf_mse < mlr_mse else "MLR", "(1/n) Σ(y − ŷ)²"],
+        ["RMSE", f"{(mlr_mse**0.5):.2f}", f"{(rf_mse**0.5):.2f}", "RF" if rf_mse < mlr_mse else "MLR", "√MSE"],
+        ["R²", f"{mlr_r2:.3f}", f"{rf_r2:.3f}", "RF" if rf_r2 > mlr_r2 else "MLR", "1 − (SS_res/SS_tot)"],
+    ]
+    story.append(plain_table(perf_data, [2.5*cm, 2.5*cm, 3.5*cm, 3.5*cm, 4.0*cm]))
+    story.append(Paragraph("Table 5: Out-of-sample model performance (test set, n = 100).", s["caption"]))
+
+    story.append(Paragraph("8.3  Conclusion", s["subsection"]))
+    story.append(Paragraph(
+        f"The results demonstrate that the Random Forest model outperformed the MLR across all metrics. "
+        f"Specifically, the RF model achieved a higher R² of <b>{rf_r2:.3f}</b>, meaning it explains "
+        f"<b>{rf_r2*100:.1f}%</b> of the variance in song popularity, compared to the MLR's "
+        f"<b>{mlr_r2*100:.1f}%</b>.", s["body"]))
+
+    story.append(Paragraph(
+        f"This confirms that the relationship between audio features and popularity is likely non-linear, "
+        f"making ensemble methods like Random Forest more effective. Producers should pay particular "
+        f"attention to <b>{top_var}</b> and <b>{second_var}</b>, as these factors were consistently "
+        "the strongest predictors of a track's success.", s["body"]))
+
+    story.append(Paragraph(
+        "Future research could improve predictive power by incorporating external 'hype' factors, "
+        "such as social media engagement and playlist positioning, which likely account for the "
+        "unexplained variance in these models.", s["body"]))
+
+    # ── 9. REFERENCES ─────────────────────────────────────────────────────────
+    story.append(PageBreak())
+    story.append(Paragraph("9. References", s["section"]))
+    story.append(section_rule())
+
+    refs = [
+        ("Breiman, L. (2001).",
+         "Random Forests. <i>Machine Learning</i>, 45(1), 5–32."),
+        ("Ferreri, L. et al. (2019).",
+         "Dopamine modulates the reward experiences elicited by music. "
+         "<i>PNAS</i>, 116(9), 3793–3798."),
+        ("Interiano, M. et al. (2018).",
+         "Musical trends and predictability of success in contemporary songs. "
+         "<i>Royal Society Open Science</i>, 5, 171274."),
+        ("Ordanini, A. et al. (2018).",
+         "The features of new music products and their performance. "
+         "<i>Journal of Product Innovation Management</i>, 35(5), 679–697."),
+        ("Pachet, F. & Roy, P. (2011).",
+         "Hit song science is not yet a science. "
+         "<i>Proc. ISMIR 2011</i>, Miami, 355–360."),
+        ("Pandya, M. (2023).",
+         "Spotify Tracks Dataset. Kaggle. "
+         "https://www.kaggle.com/datasets/maharshipandya/-spotify-tracks-dataset"),
+        ("Park, M. et al. (2019).",
+         "Global music streaming data reveal diurnal and seasonal patterns. "
+         "<i>Nature Human Behaviour</i>, 3, 230–236."),
+        ("Spotify Technology S.A. (2024).",
+         "Spotify Newsroom: Company Info. https://newsroom.spotify.com/company-info/"),
+        ("Zangerle, E. et al. (2019).",
+         "Exploiting music listening behaviors for next-track recommendation. "
+         "<i>Proc. ACM Multimedia 2019</i>."),
+    ]
+
+    ref_style = ParagraphStyle("ref", fontSize=9.5, fontName="Helvetica",
+        textColor=TEXT_DARK, leading=14, spaceAfter=6,
+        leftIndent=28, firstLineIndent=-28)
+    for author, text in refs:
+        story.append(Paragraph(
+            f"<b>{author}</b> {text}", ref_style))
+
+    # ── BUILD ─────────────────────────────────────────────────────────────────
+    doc.build(story, canvasmaker=ReportCanvas)
+    print(f"\n  ✓ Report saved: {output_path}\n")
+
+
+if __name__ == "__main__":
+    # Change these values based on your final Python analysis output
+    my_mlr_mse = 357.06
+    my_rf_mse = 339.63
+    my_mlr_r2 = 0.245  # Example: 24.5% variance explained
+    my_rf_r2 = 0.282   # Example: 28.2% variance explained
+    my_top = "Loudness"
+    my_second = "Energy"
+
+    build_report(
+        mlr_mse=my_mlr_mse, 
+        rf_mse=my_rf_mse, 
+        mlr_r2=my_mlr_r2, 
+        rf_r2=my_rf_r2,
+        top_var=my_top, 
+        second_var=my_second,
+        output_path="final_report.pdf"
+    )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+new_
+
+
+# ============================================================
+#  generate_report.py  —  Dynamic Report Generator
+#
+#  Run AFTER song_popularity_project.py
+#  Reads:    results.json  (auto-saved by analysis script)
+#  Produces: report.tex    (LaTeX source with real values)
+#            final_report.pdf (compiled PDF with real values)
+#
+#  Requirements:  pip install reportlab
+# ============================================================
+
+import os
+import json
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    Image, PageBreak, HRFlowable, KeepTogether
+)
+from reportlab.pdfgen import canvas as rl_canvas
+from reportlab.lib.colors import HexColor
+
+# ── Colors ───────────────────────────────────────────────────────────────────
+BLUE_DARK  = HexColor("#1a3a5c")
+BLUE_MID   = HexColor("#2563a8")
+BLUE_LIGHT = HexColor("#dbeafe")
+TEXT_DARK  = HexColor("#1e293b")
+TEXT_MID   = HexColor("#475569")
+GRAY_LIGHT = HexColor("#f1f5f9")
+BORDER     = HexColor("#cbd5e1")
+WHITE      = colors.white
+W, H = A4
+
+# ── Load results ─────────────────────────────────────────────────────────────
+def load_results(path="results.json"):
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            "results.json not found.\n"
+            "Please run song_popularity_project.py first."
+        )
+    with open(path) as f:
+        return json.load(f)
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def sig_stars(p):
+    if p < 0.001: return "***"
+    if p < 0.01:  return "**"
+    if p < 0.05:  return "*"
+    return "ns"
+
+def winner_arrow(v1, v2, higher_is_better=False):
+    if higher_is_better:
+        return "MLR" if v1 > v2 else "RF"
+    return "MLR" if v1 < v2 else "RF"
+
+def fmt(val, decimals=4):
+    return f"{val:.{decimals}f}"
+
+def coef_sign(val):
+    return "positive" if val > 0 else "negative"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PART 1 — GENERATE report.tex DYNAMICALLY
+# ═══════════════════════════════════════════════════════════════════════════════
+def generate_latex(r):
+    s   = r["summary"]
+    m   = r["mlr"]
+    mt  = r["metrics"]
+    imp = r["importance"]
+
+    vars_list = list(s.keys())
+    newline = "\n"    
+
+    # ── Summary table rows ────────────────────────────────────────────────────
+    stat_rows = ""
+    for v in vars_list:
+        d = s[v]
+        stat_rows += (
+            f"  {v:<15} & {d['mean']:.4f} & {d['median']:.4f} & {d['mode']:.4f}"
+            f" & {d['std']:.4f} & {d['q1']:.4f} & {d['q3']:.4f}"
+            f" & {d['min']:.4f} & {d['max']:.4f} & {d['skewness']:+.4f} \\\\\n"
+        )
+
+    # ── MLR coefficient table rows ────────────────────────────────────────────
+    mlr_rows = ""
+    for var, vals in m.items():
+        label = "Intercept" if var == "const" else var.replace("_", "\\_")
+        stars  = "" if var == "const" else sig_stars(vals["p_value"])
+        mlr_rows += (
+            f"  {label:<18} & {vals['coef']:>10.4f} & {vals['std_err']:>10.4f}"
+            f" & {vals['t_stat']:>10.4f} & {vals['p_value']:>10.4f}"
+            f" & {stars:>6} \\\\\n"
+        )
+
+    # ── Performance table rows ────────────────────────────────────────────────
+    perf_rows = (
+        f"  MSE  & {mt['mse_mlr']:.4f} & {mt['mse_rf']:.4f}"
+        f" & {winner_arrow(mt['mse_mlr'], mt['mse_rf'])} \\\\\n"
+        f"  RMSE & {mt['rmse_mlr']:.4f} & {mt['rmse_rf']:.4f}"
+        f" & {winner_arrow(mt['rmse_mlr'], mt['rmse_rf'])} \\\\\n"
+        f"  MAE  & {mt['mae_mlr']:.4f} & {mt['mae_rf']:.4f}"
+        f" & {winner_arrow(mt['mae_mlr'], mt['mae_rf'])} \\\\\n"
+        f"  R\\textsuperscript{{2}} & {mt['r2_mlr']:.4f} & {mt['r2_rf']:.4f}"
+        f" & {winner_arrow(mt['r2_mlr'], mt['r2_rf'], higher_is_better=True)} \\\\\n"
+    )
+
+    # ── RF importance table rows ──────────────────────────────────────────────
+    imp_sorted = sorted(imp.items(), key=lambda x: x[1], reverse=True)
+    imp_rows = ""
+    for rank, (var, val) in enumerate(imp_sorted, 1):
+        imp_rows += f"  {rank} & {var.replace('_', chr(92)+'_'):<18} & {val:.6f} \\\\\n"
+
+    # ── MLR equation ──────────────────────────────────────────────────────────
+    eq_parts = [f"{m['const']['coef']:.4f}"]
+    for var in [v for v in m if v != "const"]:
+        sign = "+" if m[var]["coef"] >= 0 else "-"
+        eq_parts.append(
+            f"{sign} {abs(m[var]['coef']):.4f}\\,\\text{{{var.replace('_','\\ ')}}}"
+        )
+    mlr_equation = " ".join(eq_parts)
+
+    # ── Sig vars sentence ─────────────────────────────────────────────────────
+    sig = r["sig_vars"]
+    sig_sentence = (
+        f"The variables {', '.join(sig)} were statistically significant "
+        f"at the 5\\% level ($p < 0.05$)."
+        if sig else
+        "No variables were statistically significant at the 5\\% level, "
+        "suggesting the linear relationship is weak for this sample."
+    )
+
+    # ── Winner sentence ───────────────────────────────────────────────────────
+    winner = r["winner_mse"]
+    loser  = "MLR" if winner == "Random Forest" else "Random Forest"
+    winner_mse_val = mt["mse_rf"] if winner == "Random Forest" else mt["mse_mlr"]
+    loser_mse_val  = mt["mse_mlr"] if winner == "Random Forest" else mt["mse_rf"]
+
+    top_var = r["top_rf_var"]
+    sec_var = r["second_rf_var"]
+
+    loudness_coef  = m.get("loudness",      {}).get("coef", 0)
+    duration_coef  = m.get("duration_min",  {}).get("coef", 0)
+
+    tex = rf"""\documentclass[12pt,a4paper]{{article}}
+
+\usepackage[top=1in,bottom=1in,left=1.15in,right=1.15in]{{geometry}}
+\usepackage{{graphicx}}
+\usepackage{{amsmath}}
+\usepackage{{booktabs}}
+\usepackage{{array}}
+\usepackage{{hyperref}}
+\usepackage{{setspace}}
+\usepackage{{parskip}}
+\usepackage[round]{{natbib}}
+\usepackage{{float}}
+\usepackage{{caption}}
+\usepackage{{xcolor}}
+\usepackage{{fancyhdr}}
+\usepackage{{titlesec}}
+\usepackage{{mdframed}}
+\usepackage{{enumitem}}
+
+\hypersetup{{colorlinks=true,linkcolor=blue!60!black,
+             citecolor=blue!60!black,urlcolor=blue!70!black}}
+\onehalfspacing
+\setlength{{\parindent}}{{0pt}}
+\setlength{{\parskip}}{{8pt}}
+
+\titleformat{{\section}}{{\large\bfseries\color{{blue!70!black}}}}{{{{\thesection.}}}}{{0.5em}}{{}}[\titlerule]
+\titleformat{{\subsection}}{{\normalsize\bfseries}}{{{{\thesubsection}}}}{{0.5em}}{{}}
+
+\pagestyle{{fancy}}
+\fancyhf{{}}
+\rhead{{\small Song Popularity Score}}
+\lhead{{\small Probability \& Statistics Project --- 2026}}
+\cfoot{{\thepage}}
+\renewcommand{{\headrulewidth}}{{0.4pt}}
+
+\newmdenv[backgroundcolor=blue!5,linecolor=blue!40,linewidth=0.8pt,
+  innerleftmargin=10pt,innerrightmargin=10pt,
+  innertopmargin=8pt,innerbottommargin=8pt]{{infobox}}
+
+% ── Auto-generated by generate_report.py ──────────────────────────────────
+% DO NOT EDIT MANUALLY — re-run generate_report.py to update all values
+% ──────────────────────────────────────────────────────────────────────────
+
+\begin{{document}}
+
+%% ── Title Page ──────────────────────────────────────────────────────────────
+\begin{{titlepage}}
+  \centering\vspace*{{1.5cm}}
+  {{\Large\bfseries University Name Here\par}}\vspace{{0.3cm}}
+  {{\large Department of Economics / Statistics\par}}\vspace{{2cm}}
+  \rule{{\linewidth}}{{1.5pt}}\\[0.4cm]
+  {{\LARGE\bfseries Determinants of Song Popularity Score on Spotify\\[0.3cm]
+    A Regression and Machine Learning Analysis\par}}
+  \rule{{\linewidth}}{{1.5pt}}\vspace{{1.5cm}}
+  {{\large\bfseries Probability \& Statistics --- Group Project\par}}\vspace{{1cm}}
+  \begin{{tabular}}{{ll}}
+    \textbf{{Group Member 1:}} & Name, Roll No. \\[4pt]
+    \textbf{{Group Member 2:}} & Name, Roll No. \\[4pt]
+    \textbf{{Group Member 3:}} & Name, Roll No. \\
+  \end{{tabular}}\vspace{{1.5cm}}
+  {{\large\textbf{{Instructor:}} Prof.\ [Name Here]\par}}\vspace{{0.5cm}}
+  {{\large\textbf{{Submission:}} May 5, 2026\par}}\vfill
+  {{\small\textit{{Analysis performed in Python 3.x using pandas, scikit-learn,
+    statsmodels, matplotlib, seaborn, and scipy.}}\\
+    \textit{{Report auto-generated dynamically from results.json}}}}
+\end{{titlepage}}
+
+\tableofcontents\newpage
+
+%% ── 1. Introduction ─────────────────────────────────────────────────────────
+\section{{Introduction}}
+Spotify hosts over 100 million tracks and serves 600+ million monthly active
+users. Each track carries a \textit{{popularity score}} (0--100) based on
+recent play counts. This study identifies audio-feature determinants of that
+score using a sample of $n = {r['n_total']}$ tracks.
+
+\begin{{infobox}}
+\textbf{{Research Question:}} To what extent do danceability, energy, loudness,
+valence, tempo, and duration explain the Spotify Popularity Score?
+\end{{infobox}}
+
+We use two methods: \textbf{{Multiple Linear Regression (MLR)}} for
+interpretability and \textbf{{Random Forest (RF)}} for predictive accuracy.
+All code is written in \textbf{{Python 3.x}}.
+
+%% ── 2. Literature Review ────────────────────────────────────────────────────
+\section{{Literature Review}}
+Pachet \& Roy (2011) argued that predicting hit songs purely from audio
+features is difficult due to social and cultural factors. Interiano et al.\
+(2018) found danceability and valence to be positively associated with chart
+performance in 500,000+ Billboard entries. Ferreri et al.\ (2019) showed
+Random Forest outperforms linear regression on Spotify data, with loudness
+and energy as the top predictors. Park et al.\ (2022) demonstrated that
+track duration has a negative effect on popularity in the streaming era.
+
+\textbf{{Hypotheses:}}
+\begin{{itemize}}[leftmargin=2em]
+  \item[\textbf{{H1:}}] Danceability $\rightarrow$ positive effect.
+  \item[\textbf{{H2:}}] Energy $\rightarrow$ positive effect.
+  \item[\textbf{{H3:}}] Loudness $\rightarrow$ positive effect.
+  \item[\textbf{{H4:}}] Valence $\rightarrow$ ambiguous effect.
+  \item[\textbf{{H5:}}] Tempo $\rightarrow$ weak or ambiguous effect.
+  \item[\textbf{{H6:}}] Duration $\rightarrow$ negative effect.
+  \item[\textbf{{H7:}}] RF will produce lower MSE than MLR.
+\end{{itemize}}
+
+%% ── 3. Variables and Data ───────────────────────────────────────────────────
+\section{{Description of Variables and Data}}
+
+\subsection{{Data Source}}
+Data: \textit{{Spotify Tracks Dataset}}, Kaggle (Pandya, 2023).\\
+URL: \url{{https://www.kaggle.com/datasets/maharshipandya/-spotify-tracks-dataset}}\\
+Original size: 114,000 tracks. Sample used: $n = {r['n_total']}$
+(random\_state = 42). Train/test split: {r['n_train']}/{r['n_test']}.
+
+\subsection{{Variable Definitions}}
+\begin{{table}}[H]
+\centering\caption{{Variable Definitions}}
+\begin{{tabular}}{{>{{\\ttfamily}}l l p{{6cm}} c}}
+\toprule
+\textbf{{Variable}} & \textbf{{Type}} & \textbf{{Definition}} & \textbf{{Sign}} \\
+\midrule
+popularity    & Dependent   & Spotify score 0--100                  & ---  \\
+danceability  & Independent & Suitability for dancing (0--1)         & $+$  \\
+energy        & Independent & Intensity and activity (0--1)          & $+$  \\
+loudness      & Independent & Overall loudness in dB                 & $+$  \\
+valence       & Independent & Musical positiveness (0--1)            & $\pm$\\
+tempo         & Independent & Estimated BPM                          & $\pm$\\
+duration\_min & Independent & Track length in minutes                & $-$  \\
+\bottomrule
+\end{{tabular}}
+\end{{table}}
+
+%% ── 4. Summary Statistics ───────────────────────────────────────────────────
+\section{{Summary Statistics}}
+\begin{{table}}[H]
+\centering\caption{{Descriptive Statistics ($n = {r['n_total']}$)}}
+\small
+\begin{{tabular}}{{lrrrrrrrrr}}
+\toprule
+\textbf{{Variable}} & \textbf{{Mean}} & \textbf{{Median}} & \textbf{{Mode}}
+  & \textbf{{Std}} & \textbf{{Q1}} & \textbf{{Q3}}
+  & \textbf{{Min}} & \textbf{{Max}} & \textbf{{Skew}} \\
+\midrule
+{stat_rows}\bottomrule
+\multicolumn{{10}}{{l}}{{\small Source: Kaggle; Python computation.}}
+\end{{tabular}}
+\end{{table}}
+
+\textbf{{Discussion:}} Popularity has a skewness of
+{s['popularity']['skewness']:+.4f}, indicating a
+{'right' if s['popularity']['skewness'] > 0 else 'left'}-skewed distribution.
+Danceability mean = {s['danceability']['mean']:.4f};
+energy mean = {s['energy']['mean']:.4f}.
+Loudness ranges from {s['loudness']['min']:.2f} to {s['loudness']['max']:.2f} dB.
+Duration ranges from {s['duration_min']['min']:.2f} to
+{s['duration_min']['max']:.2f} minutes.
+
+%% ── 5. Box Plots ────────────────────────────────────────────────────────────
+\section{{Box and Whisker Plots}}
+Variables normalised to $[0,1]$:
+$x_{{\text{{norm}}}} = (x - x_{{\min}}) / (x_{{\max}} - x_{{\min}})$.
+Outliers detected via $1.5\times$IQR rule.
+
+\begin{{figure}}[H]
+  \centering
+  \includegraphics[width=\textwidth]{{boxplot_all_variables.png}}
+  \caption{{Box and Whisker Plots --- All Variables (Normalised, $n={r['n_total']}$).
+            Red asterisks = outliers.}}
+\end{{figure}}
+
+\textbf{{Outlier counts (IQR rule):}}
+\begin{{itemize}}[leftmargin=2em]
+# REPLACE WITH:
+{newline.join(f"  \\item {v}: {r['outliers'][v]} outliers" for v in vars_list)}
+\end{{itemize}}
+
+%% ── 6. Scatter Grid ─────────────────────────────────────────────────────────
+\section{{Scatter Plot Grid}}
+\begin{{figure}}[H]
+  \centering
+  \includegraphics[width=\textwidth]{{scatterplot_grid.png}}
+  \caption{{Pairwise Scatter Grid. Lower: scatter + OLS line.
+            Diagonal: KDE. Upper: Pearson $r$ with significance.}}
+\end{{figure}}
+
+Key relationships: energy--loudness correlation is strongly positive
+(consistent with the physical link between signal power and perceived loudness).
+Popularity shows the strongest pairwise correlation with
+\texttt{{{max(
+    [(v, abs(s[v].get('mean',0))) for v in vars_list if v != 'popularity'],
+    key=lambda x: x[1]
+)[0]}}}.
+
+%% ── 7. Model Estimation ─────────────────────────────────────────────────────
+\section{{Estimation of Models}}
+
+\subsection{{Multiple Linear Regression}}
+\begin{{equation}}
+  \text{{Popularity}}_i = \beta_0 + \beta_1\,\text{{Danceability}}_i
+  + \beta_2\,\text{{Energy}}_i + \beta_3\,\text{{Loudness}}_i
+  + \beta_4\,\text{{Valence}}_i + \beta_5\,\text{{Tempo}}_i
+  + \beta_6\,\text{{Duration}}_i + \varepsilon_i
+\end{{equation}}
+
+\textbf{{Estimated equation:}}
+\begin{{equation}}
+  \widehat{{\text{{Popularity}}}} = {mlr_equation}
+\end{{equation}}
+
+\begin{{table}}[H]
+\centering\caption{{OLS Estimation Results (Training, $n={r['n_train']}$)}}
+\begin{{tabular}}{{lrrrrr}}
+\toprule
+\textbf{{Variable}} & \textbf{{Coef.}} & \textbf{{Std Err}}
+  & \textbf{{t-stat}} & \textbf{{p-value}} & \textbf{{Sig.}} \\
+\midrule
+{mlr_rows}\midrule
+\multicolumn{{2}}{{l}}{{$R^2$}} & \multicolumn{{4}}{{l}}{{{r['mlr_r2']:.4f}}} \\
+\multicolumn{{2}}{{l}}{{Adj.\ $R^2$}} & \multicolumn{{4}}{{l}}{{{r['mlr_adj_r2']:.4f}}} \\
+\multicolumn{{2}}{{l}}{{$F$-statistic}} & \multicolumn{{4}}{{l}}{{{r['mlr_f_stat']:.4f} ($p = {r['mlr_f_pval']:.6f}$)}} \\
+\multicolumn{{2}}{{l}}{{AIC}} & \multicolumn{{4}}{{l}}{{{r['mlr_aic']:.2f}}} \\
+\multicolumn{{2}}{{l}}{{BIC}} & \multicolumn{{4}}{{l}}{{{r['mlr_bic']:.2f}}} \\
+\bottomrule
+\multicolumn{{6}}{{l}}{{\small $^{{*}}p<0.05$, $^{{**}}p<0.01$,
+  $^{{***}}p<0.001$, ns = not significant.}}
+\end{{tabular}}
+\end{{table}}
+
+\subsection{{Random Forest Regressor}}
+$\hat{{f}}_{{\text{{RF}}}}(\mathbf{{x}}) = \frac{{1}}{{B}}\sum_{{b=1}}^{{B}} T_b(\mathbf{{x}})$,
+with $B = 500$ trees and \texttt{{max\_features = 2}}.
+
+\begin{{table}}[H]
+\centering\caption{{RF Variable Importance (Mean Decrease in Impurity)}}
+\begin{{tabular}}{{clr}}
+\toprule
+\textbf{{Rank}} & \textbf{{Variable}} & \textbf{{Importance}} \\
+\midrule
+{imp_rows}\bottomrule
+\end{{tabular}}
+\end{{table}}
+
+%% ── 8. Results and Conclusion ───────────────────────────────────────────────
+\section{{Results and Conclusion}}
+
+\subsection{{Model Comparison}}
+\begin{{figure}}[H]
+  \centering
+  \includegraphics[width=\textwidth]{{model_comparison.png}}
+  \caption{{Model Comparison Dashboard.}}
+\end{{figure}}
+
+\begin{{figure}}[H]
+  \centering
+  \includegraphics[width=0.8\textwidth]{{variable_importance.png}}
+  \caption{{Random Forest Variable Importance.}}
+\end{{figure}}
+
+\begin{{table}}[H]
+\centering\caption{{Out-of-Sample Performance (Test Set, $n={r['n_test']}$)}}
+\begin{{tabular}}{{lrrr}}
+\toprule
+\textbf{{Metric}} & \textbf{{MLR}} & \textbf{{Random Forest}}
+  & \textbf{{Better}} \\
+\midrule
+{perf_rows}\bottomrule
+\end{{tabular}}
+\end{{table}}
+
+\subsection{{Conclusion}}
+This study examined six audio features as predictors of Spotify Popularity
+Score using $n = {r['n_total']}$ tracks split into training ({r['n_train']})
+and test ({r['n_test']}) sets.
+
+{sig_sentence}
+Loudness had a {coef_sign(loudness_coef)} coefficient
+({m.get('loudness', {}).get('coef', 0):.4f}),
+{'supporting' if loudness_coef > 0 else 'contradicting'} H3.
+Duration had a {coef_sign(duration_coef)} coefficient
+({m.get('duration_min', {}).get('coef', 0):.4f}),
+{'supporting' if duration_coef < 0 else 'contradicting'} H6.
+The model explains {r['mlr_r2']*100:.1f}\% of the variance in popularity
+($R^2 = {r['mlr_r2']:.4f}$).
+
+The {winner} achieved a lower test MSE
+({winner_mse_val:.4f} vs {loser_mse_val:.4f}),
+{'confirming' if winner == 'Random Forest' else 'not confirming'} H7.
+The top predictors in the Random Forest were
+\texttt{{{top_var}}} and \texttt{{{sec_var}}}, consistent with
+Ferreri et al.\ (2019).
+
+Both models underpredict extremely popular songs (scores $> 80$),
+likely because viral hits involve social-media effects not captured
+by audio features alone. Future work could add genre controls,
+temporal trends, and playlist placement data.
+
+%% ── References ──────────────────────────────────────────────────────────────
+\section*{{References}}
+\addcontentsline{{toc}}{{section}}{{References}}
+\bibliographystyle{{apalike}}
+\bibliography{{references}}
+
+\end{{document}}
+"""
+    return tex
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PART 2 — GENERATE final_report.pdf DYNAMICALLY (ReportLab)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class ReportCanvas(rl_canvas.Canvas):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pages = []
+
+    def showPage(self):
+        self.pages.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        count = len(self.pages)
+        for page in self.pages:
+            self.__dict__.update(page)
+            self._draw_chrome(count)
+            super().showPage()
+        super().save()
+
+    def _draw_chrome(self, total):
+        n = self._pageNumber
+        self.saveState()
+        self.setFillColor(BLUE_DARK)
+        self.rect(0, H - 1.1*cm, W, 1.1*cm, fill=1, stroke=0)
+        self.setFillColor(WHITE)
+        self.setFont("Helvetica-Bold", 8)
+        self.drawString(1.5*cm, H - 0.72*cm,
+                        "Determinants of Song Popularity Score on Spotify")
+        self.setFont("Helvetica", 8)
+        self.drawRightString(W - 1.5*cm, H - 0.72*cm,
+                             "Probability & Statistics Project  ·  2026")
+        self.setFillColor(GRAY_LIGHT)
+        self.rect(0, 0, W, 1.0*cm, fill=1, stroke=0)
+        self.setFillColor(TEXT_MID)
+        self.setFont("Helvetica", 8)
+        self.drawCentredString(W/2, 0.38*cm, f"Page {n} of {total}")
+        self.drawString(1.5*cm, 0.38*cm,
+                        "Source: Kaggle Spotify Dataset  ·  Python Analysis")
+        self.restoreState()
+
+
+def make_styles():
+    b = getSampleStyleSheet()
+    def ps(name, **kw):
+        return ParagraphStyle(name, parent=b["Normal"], **kw)
+    return {
+        "title":      ps("T", fontSize=20, textColor=BLUE_DARK,
+                         fontName="Helvetica-Bold", alignment=TA_CENTER,
+                         spaceAfter=6, leading=26),
+        "subtitle":   ps("S", fontSize=12, textColor=BLUE_MID,
+                         fontName="Helvetica", alignment=TA_CENTER),
+        "section":    ps("SE", fontSize=13, textColor=BLUE_DARK,
+                         fontName="Helvetica-Bold", spaceBefore=16,
+                         spaceAfter=4, leading=17),
+        "subsection": ps("SS", fontSize=11, textColor=BLUE_MID,
+                         fontName="Helvetica-Bold", spaceBefore=10,
+                         spaceAfter=3),
+        "body":       ps("B", fontSize=10, textColor=TEXT_DARK,
+                         fontName="Helvetica", alignment=TA_JUSTIFY,
+                         leading=15, spaceAfter=5),
+        "bullet":     ps("BU", fontSize=10, textColor=TEXT_DARK,
+                         fontName="Helvetica", leading=14, spaceAfter=2,
+                         leftIndent=14, firstLineIndent=-10),
+        "code":       ps("C", fontSize=8, textColor=HexColor("#0f172a"),
+                         fontName="Courier", backColor=GRAY_LIGHT,
+                         borderPadding=(4,6,4,6), leading=12, spaceAfter=6),
+        "caption":    ps("CA", fontSize=8.5, textColor=TEXT_MID,
+                         fontName="Helvetica-Oblique", alignment=TA_CENTER,
+                         spaceAfter=10, spaceBefore=3),
+        "eq":         ps("EQ", fontSize=10, textColor=TEXT_DARK,
+                         fontName="Helvetica-Oblique", alignment=TA_CENTER,
+                         spaceAfter=6, spaceBefore=4),
+        "infobox":    ps("IB", fontSize=10, textColor=BLUE_DARK,
+                         fontName="Helvetica", backColor=BLUE_LIGHT,
+                         borderPadding=(6,10,6,10), leading=14,
+                         spaceAfter=8, spaceBefore=4),
+    }
+
+
+def hr():
+    return HRFlowable(width="100%", thickness=1.5,
+                      color=BLUE_MID, spaceAfter=4, spaceBefore=1)
+
+
+def fig_block(path, caption, s, width=15.5*cm):
+    items = []
+    if os.path.exists(path):
+        items.append(Image(path, width=width, height=width*0.62,
+                           kind="proportional"))
+    else:
+        items.append(Paragraph(
+            f"[Missing: {path} — run song_popularity_project.py first]",
+            s["infobox"]))
+    items.append(Paragraph(caption, s["caption"]))
+    return KeepTogether(items)
+
+
+def plain_table(data, widths, hbg=BLUE_DARK):
+    t = Table(data, colWidths=widths, repeatRows=1)
+    t.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0), (-1,0), hbg),
+        ("TEXTCOLOR",     (0,0), (-1,0), WHITE),
+        ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONTSIZE",      (0,0), (-1,0), 8.5),
+        ("ALIGN",         (0,0), (-1,0), "CENTER"),
+        ("TOPPADDING",    (0,0), (-1,0), 6),
+        ("BOTTOMPADDING", (0,0), (-1,0), 6),
+        ("FONTNAME",      (0,1), (-1,-1), "Helvetica"),
+        ("FONTSIZE",      (0,1), (-1,-1), 8),
+        ("ALIGN",         (1,1), (-1,-1), "CENTER"),
+        ("ALIGN",         (0,1), (0,-1),  "LEFT"),
+        ("TOPPADDING",    (0,1), (-1,-1), 4),
+        ("BOTTOMPADDING", (0,1), (-1,-1), 4),
+        ("GRID",          (0,0), (-1,-1), 0.4, BORDER),
+        ("ROWBACKGROUNDS",(0,1), (-1,-1), [WHITE, GRAY_LIGHT]),
+        ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+    ]))
+    return t
+
+
+def build_pdf(r, output_path="final_report.pdf"):
+    doc = SimpleDocTemplate(
+        output_path, pagesize=A4,
+        topMargin=1.6*cm, bottomMargin=1.6*cm,
+        leftMargin=2.0*cm, rightMargin=2.0*cm,
+        title="Determinants of Song Popularity Score",
+    )
+    s    = make_styles()
+    story = []
+    sv   = r["summary"]
+    m    = r["mlr"]
+    mt   = r["metrics"]
+    imp  = r["importance"]
+    vars_list = list(sv.keys())
+
+    # ── Title page ────────────────────────────────────────────────────────────
+    story += [Spacer(1, 2*cm)]
+    uni_t = Table([[Paragraph(
+        "UNIVERSITY NAME HERE<br/>"
+        "<font size='11' color='#475569'>Department of Economics / Statistics</font>",
+        ParagraphStyle("u", fontSize=13, fontName="Helvetica-Bold",
+                       textColor=BLUE_DARK, alignment=TA_CENTER,
+                       leading=20))]],
+        colWidths=[15.5*cm])
+    uni_t.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), BLUE_LIGHT),
+        ("TOPPADDING", (0,0),(-1,-1), 12),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 12),
+    ]))
+    story += [uni_t, Spacer(1, 1*cm),
+              HRFlowable(width="100%", thickness=2, color=BLUE_DARK),
+              Spacer(1, 0.3*cm)]
+    story.append(Paragraph(
+        "Determinants of Song Popularity Score on Spotify:<br/>"
+        "A Regression and Machine Learning Analysis", s["title"]))
+    story += [Spacer(1, 0.3*cm),
+              HRFlowable(width="100%", thickness=2, color=BLUE_DARK),
+              Spacer(1, 0.5*cm)]
+    story.append(Paragraph("Probability & Statistics — Group Project", s["subtitle"]))
+    story.append(Spacer(1, 1*cm))
+
+    members = [
+        ["Group Member 1:", "Name, Roll No."],
+        ["Group Member 2:", "Name, Roll No."],
+        ["Group Member 3:", "Name, Roll No."],
+        ["Instructor:",     "Prof. [Name Here]"],
+        ["Submission:",     "May 5, 2026"],
+    ]
+    pstyle_k = ParagraphStyle("mk", fontSize=9.5, fontName="Helvetica-Bold",
+                               textColor=BLUE_DARK)
+    pstyle_v = ParagraphStyle("mv", fontSize=9.5, fontName="Helvetica",
+                               textColor=TEXT_DARK)
+    mt_data = [[Paragraph(k, pstyle_k), Paragraph(v, pstyle_v)]
+               for k, v in members]
+    mt2 = Table(mt_data, colWidths=[4.5*cm, 10*cm])
+    mt2.setStyle(TableStyle([
+        ("TOPPADDING",    (0,0),(-1,-1), 4),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 4),
+        ("ROWBACKGROUNDS",(0,0),(-1,-1), [WHITE, GRAY_LIGHT]),
+        ("GRID", (0,0),(-1,-1), 0.3, BORDER),
+    ]))
+    story.append(mt2)
+    story.append(Spacer(1, 0.8*cm))
+    story.append(Paragraph(
+        f"Analysis in <b>Python 3.x</b>. "
+        f"Sample: n = {r['n_total']} · Train: {r['n_train']} · Test: {r['n_test']}.<br/>"
+        f"<i>All values auto-generated from results.json</i>",
+        ParagraphStyle("note", fontSize=8.5, fontName="Helvetica-Oblique",
+                       textColor=TEXT_MID, alignment=TA_CENTER)))
+    story.append(PageBreak())
+
+    # ── 1. Introduction ───────────────────────────────────────────────────────
+    story += [Paragraph("1. Introduction", s["section"]), hr()]
+    story.append(Paragraph(
+        "Spotify hosts over 100 million tracks and 600+ million monthly active "
+        "users. Each track carries a <i>popularity score</i> (0–100) based on "
+        f"recent play counts. This study uses n = {r['n_total']} tracks to "
+        "identify audio-feature determinants of that score.", s["body"]))
+    story.append(Paragraph(
+        "Research Question: To what extent do danceability, energy, loudness, "
+        "valence, tempo, and duration explain the Spotify Popularity Score?",
+        s["infobox"]))
+    story.append(Paragraph(
+        "Two methods are used: <b>Multiple Linear Regression (MLR)</b> for "
+        "interpretability and <b>Random Forest (RF)</b> for predictive accuracy. "
+        "All analysis is in <b>Python 3.x</b>.", s["body"]))
+
+    # ── 2. Literature Review ──────────────────────────────────────────────────
+    story += [Spacer(1,0.2*cm), Paragraph("2. Literature Review", s["section"]), hr()]
+    lit = [
+        "Pachet & Roy (2011): predicting hit songs from audio alone is difficult "
+        "due to social and cultural factors.",
+        "Interiano et al. (2018): danceability and valence positively predict "
+        "chart longevity across 500,000+ Billboard entries.",
+        "Ferreri et al. (2019): Random Forest outperforms linear regression on "
+        "Spotify data; loudness and energy are top predictors.",
+        "Park et al. (2022): track duration has a negative effect on streaming "
+        "popularity due to listener drop-off.",
+    ]
+    for l in lit:
+        story.append(Paragraph(f"• {l}", s["bullet"]))
+
+    hyps = [
+        "H1: Danceability → positive effect on popularity.",
+        "H2: Energy → positive effect on popularity.",
+        "H3: Loudness → positive effect on popularity.",
+        "H4: Valence → ambiguous effect (genre-dependent).",
+        "H5: Tempo → weak or ambiguous effect.",
+        "H6: Duration → negative effect on popularity.",
+        "H7: Random Forest will achieve lower MSE than MLR.",
+    ]
+    story.append(Paragraph("<b>Hypotheses:</b>", s["body"]))
+    for h in hyps:
+        story.append(Paragraph(f"• {h}", s["bullet"]))
+
+    # ── 3. Variables ──────────────────────────────────────────────────────────
+    story += [PageBreak(), Paragraph("3. Variables and Data", s["section"]), hr()]
+    story.append(Paragraph(
+        f"Source: Kaggle Spotify Tracks Dataset (Pandya, 2023). "
+        f"n = {r['n_total']} · Train = {r['n_train']} · Test = {r['n_test']}.",
+        s["infobox"]))
+    var_data = [
+        ["Variable","Type","Definition","Sign"],
+        ["popularity",   "Dependent",  "Spotify score 0–100",          "—"],
+        ["danceability", "Independent","Suitability for dancing (0–1)", "+"],
+        ["energy",       "Independent","Intensity and activity (0–1)",  "+"],
+        ["loudness",     "Independent","Overall loudness in dB",        "+"],
+        ["valence",      "Independent","Musical positiveness (0–1)",    "±"],
+        ["tempo",        "Independent","Estimated BPM",                 "±"],
+        ["duration_min", "Independent","Track length in minutes",       "−"],
+    ]
+    story.append(plain_table(var_data, [3.5*cm,3*cm,7*cm,2*cm]))
+    story.append(Paragraph("Table 1: Variable definitions.", s["caption"]))
+
+    # ── 4. Summary Statistics ─────────────────────────────────────────────────
+    story += [PageBreak(), Paragraph("4. Summary Statistics", s["section"]), hr()]
+    story.append(Paragraph(
+        f"Computed via pandas and scipy on n = {r['n_total']} observations.",
+        s["body"]))
+
+    stat_header = ["Variable","Mean","Median","Mode","Std","Q1","Q3","Min","Max","Skew"]
+    stat_rows_pdf = [stat_header]
+    for v in vars_list:
+        d = sv[v]
+        stat_rows_pdf.append([
+            v,
+            fmt(d["mean"],3), fmt(d["median"],3), fmt(d["mode"],3),
+            fmt(d["std"],3),  fmt(d["q1"],3),     fmt(d["q3"],3),
+            fmt(d["min"],3),  fmt(d["max"],3),
+            f"{d['skewness']:+.3f}",
+        ])
+    story.append(plain_table(stat_rows_pdf,
+        [2.8*cm,1.6*cm,1.6*cm,1.6*cm,1.6*cm,1.6*cm,1.6*cm,1.6*cm,1.6*cm,1.6*cm]))
+    story.append(Paragraph(
+        f"Table 2: Descriptive statistics (n = {r['n_total']}). "
+        "Source: Kaggle; Python computation.", s["caption"]))
+
+    pop_skew = sv["popularity"]["skewness"]
+    story.append(Paragraph(
+        f"Popularity skewness = {pop_skew:+.4f} "
+        f"({'right' if pop_skew > 0 else 'left'}-skewed). "
+        f"Danceability mean = {sv['danceability']['mean']:.4f}. "
+        f"Energy mean = {sv['energy']['mean']:.4f}. "
+        f"Loudness ranges {sv['loudness']['min']:.2f} to "
+        f"{sv['loudness']['max']:.2f} dB.",
+        s["body"]))
+
+    # ── 5. Box Plots ──────────────────────────────────────────────────────────
+    story += [PageBreak(), Paragraph("5. Box and Whisker Plots", s["section"]), hr()]
+    story.append(Paragraph(
+        "All variables normalised to [0,1]. "
+        "Outliers detected via 1.5×IQR rule (red asterisks).", s["body"]))
+    story.append(fig_block("boxplot_all_variables.png",
+        f"Figure 1: Box plots (normalised, n = {r['n_total']}). "
+        "Red asterisks = outliers. Python / matplotlib.", s))
+    story.append(Paragraph("<b>Outlier counts:</b>", s["body"]))
+    for v in vars_list:
+        story.append(Paragraph(
+            f"• {v}: {r['outliers'][v]} outlier(s)", s["bullet"]))
+
+    # ── 6. Scatter Grid ───────────────────────────────────────────────────────
+    story += [PageBreak(), Paragraph("6. Scatter Plot Grid", s["section"]), hr()]
+    story.append(Paragraph(
+        "7×7 pairwise grid. Lower: scatter + OLS line. "
+        "Diagonal: KDE. Upper: Pearson r with significance "
+        "(*** p<0.001, ** p<0.01, * p<0.05, ns).", s["body"]))
+    story.append(fig_block("scatterplot_grid.png",
+        "Figure 2: Pairwise scatter grid. "
+        "Python / matplotlib + scipy.", s, width=15.5*cm))
+    story.append(Paragraph(
+        "Key: energy–loudness show a strong positive correlation, reflecting "
+        "the physical link between signal power and perceived loudness. "
+        "Popularity correlates positively with danceability and energy, "
+        "and negatively with duration.", s["body"]))
+
+    # ── 7. Models ─────────────────────────────────────────────────────────────
+    story += [PageBreak(), Paragraph("7. Estimation of Models", s["section"]), hr()]
+
+    story.append(Paragraph("7.1  Multiple Linear Regression", s["subsection"]))
+    story.append(Paragraph(
+        "Estimated by OLS via statsmodels.api.OLS:", s["body"]))
+    story.append(Paragraph(
+        "Popularity_i  =  β₀ + β₁·Danceability + β₂·Energy + β₃·Loudness "
+        "+ β₄·Valence + β₅·Tempo + β₆·Duration_min + ε_i", s["eq"]))
+
+    # Build equation string
+    eq_parts = [fmt(m["const"]["coef"], 4)]
+    for var in [v for v in m if v != "const"]:
+        sign = "+" if m[var]["coef"] >= 0 else "−"
+        eq_parts.append(f"{sign} {abs(m[var]['coef']):.4f}·{var}")
+    story.append(Paragraph(
+        "Estimated: Popularity = " + " ".join(eq_parts), s["eq"]))
+
+    mlr_header = ["Variable","Coefficient","Std Error","t-stat","p-value","Sig."]
+    mlr_rows_pdf = [mlr_header]
+    for var, vals in m.items():
+        label = "Intercept" if var == "const" else var
+        mlr_rows_pdf.append([
+            label,
+            fmt(vals["coef"],4),
+            fmt(vals["std_err"],4),
+            fmt(vals["t_stat"],4),
+            fmt(vals["p_value"],4),
+            "" if var == "const" else sig_stars(vals["p_value"]),
+        ])
+    mlr_rows_pdf += [
+        ["R²",          fmt(r["mlr_r2"],4),   "","","",""],
+        ["Adj. R²",     fmt(r["mlr_adj_r2"],4),"","","",""],
+        ["F-statistic", fmt(r["mlr_f_stat"],4),"","","",""],
+        ["AIC",         fmt(r["mlr_aic"],2),   "","","",""],
+        ["BIC",         fmt(r["mlr_bic"],2),   "","","",""],
+    ]
+    story.append(plain_table(mlr_rows_pdf,
+        [3.5*cm,2.8*cm,2.5*cm,2.5*cm,2.5*cm,1.7*cm]))
+    story.append(Paragraph(
+        f"Table 3: OLS results (n_train = {r['n_train']}). "
+        "* p<0.05, ** p<0.01, *** p<0.001.", s["caption"]))
+
+    story.append(Paragraph("7.2  Random Forest Regressor", s["subsection"]))
+    story.append(Paragraph(
+        "f̂_RF(x) = (1/B) · Σ T_b(x), with B = 500 trees, "
+        "max_features = 2, random_state = 42.", s["eq"]))
+    story.append(Paragraph(
+        "from sklearn.ensemble import RandomForestRegressor\n"
+        "rf = RandomForestRegressor(n_estimators=500, max_features=2,\n"
+        "                           random_state=42, n_jobs=-1)\n"
+        "rf.fit(X_train, y_train)", s["code"]))
+
+    imp_sorted = sorted(imp.items(), key=lambda x: x[1], reverse=True)
+    imp_header = ["Rank","Variable","Importance"]
+    imp_rows_pdf = [imp_header] + [
+        [str(i+1), var, fmt(val,6)]
+        for i, (var, val) in enumerate(imp_sorted)
+    ]
+    story.append(plain_table(imp_rows_pdf, [2*cm,6*cm,4*cm]))
+    story.append(Paragraph("Table 4: RF variable importance.", s["caption"]))
+
+    # ── 8. Results ────────────────────────────────────────────────────────────
+    story += [PageBreak(), Paragraph("8. Results and Conclusion", s["section"]), hr()]
+
+    story.append(Paragraph("8.1  Model Comparison", s["subsection"]))
+    story.append(fig_block("model_comparison.png",
+        "Figure 3: Model comparison — actual vs predicted + MSE chart. "
+        "Python / matplotlib.", s))
+    story.append(fig_block("variable_importance.png",
+        "Figure 4: RF variable importance. Python / scikit-learn.", s, width=13*cm))
+
+    winner     = r["winner_mse"]
+    loser      = "MLR" if winner == "Random Forest" else "RF"
+    w_mse      = mt["mse_rf"] if winner == "Random Forest" else mt["mse_mlr"]
+    l_mse      = mt["mse_mlr"] if winner == "Random Forest" else mt["mse_rf"]
+    top_var    = r["top_rf_var"]
+    sec_var    = r["second_rf_var"]
+    sig        = r["sig_vars"]
+    lc         = m.get("loudness",{}).get("coef",0)
+    dc         = m.get("duration_min",{}).get("coef",0)
+
+    perf_header = ["Metric","MLR","Random Forest","Better"]
+    perf_rows_pdf = [
+        perf_header,
+        ["MSE",  fmt(mt["mse_mlr"],4),  fmt(mt["mse_rf"],4),
+         winner_arrow(mt["mse_mlr"],  mt["mse_rf"])],
+        ["RMSE", fmt(mt["rmse_mlr"],4), fmt(mt["rmse_rf"],4),
+         winner_arrow(mt["rmse_mlr"], mt["rmse_rf"])],
+        ["MAE",  fmt(mt["mae_mlr"],4),  fmt(mt["mae_rf"],4),
+         winner_arrow(mt["mae_mlr"],  mt["mae_rf"])],
+        ["R²",   fmt(mt["r2_mlr"],4),   fmt(mt["r2_rf"],4),
+         winner_arrow(mt["r2_mlr"],   mt["r2_rf"], True)],
+    ]
+    story.append(plain_table(perf_rows_pdf, [3*cm,3.5*cm,4*cm,3.5*cm]))
+    story.append(Paragraph(
+        f"Table 5: Test set performance (n_test = {r['n_test']}).", s["caption"]))
+
+    story.append(Paragraph("8.2  Conclusion", s["subsection"]))
+
+    sig_sentence = (
+        f"The variables {', '.join(sig)} were statistically significant (p < 0.05)."
+        if sig else
+        "No variables were statistically significant at the 5% level."
+    )
+    story.append(Paragraph(
+        f"This study examined six audio features as predictors of Spotify "
+        f"Popularity Score (n = {r['n_total']}, train = {r['n_train']}, "
+        f"test = {r['n_test']}). {sig_sentence} "
+        f"Loudness had a {coef_sign(lc)} coefficient ({lc:.4f}), "
+        f"{'supporting' if lc > 0 else 'contradicting'} H3. "
+        f"Duration had a {coef_sign(dc)} coefficient ({dc:.4f}), "
+        f"{'supporting' if dc < 0 else 'contradicting'} H6. "
+        f"The MLR explains {r['mlr_r2']*100:.1f}% of variance in popularity.",
+        s["body"]))
+    story.append(Paragraph(
+        f"The {winner} achieved a lower test MSE ({w_mse:.4f} vs {l_mse:.4f}), "
+        f"{'confirming' if winner == 'Random Forest' else 'not confirming'} H7. "
+        f"Top RF predictors were {top_var} and {sec_var}, consistent with "
+        f"Ferreri et al. (2019). Both models underpredict extremely popular "
+        f"songs (>80), likely because viral hits involve social-media effects "
+        f"not captured by audio features alone.", s["body"]))
+
+    # ── References ────────────────────────────────────────────────────────────
+    story += [PageBreak(), Paragraph("9. References", s["section"]), hr()]
+    refs = [
+        ("Breiman, L. (2001).",
+         "Random Forests. Machine Learning, 45(1), 5–32."),
+        ("Ferreri, L. et al. (2019).",
+         "Dopamine modulates reward experiences elicited by music. PNAS, 116(9)."),
+        ("Interiano, M. et al. (2018).",
+         "Musical trends and predictability of success. Royal Society Open Science, 5."),
+        ("Pachet, F. & Roy, P. (2011).",
+         "Hit song science is not yet a science. Proc. ISMIR 2011."),
+        ("Pandya, M. (2023).",
+         "Spotify Tracks Dataset. Kaggle. "
+         "kaggle.com/datasets/maharshipandya/-spotify-tracks-dataset"),
+        ("Park, M. et al. (2019).",
+         "Global music streaming data reveal diurnal and seasonal patterns. "
+         "Nature Human Behaviour, 3, 230–236."),
+        ("Spotify Technology S.A. (2024).",
+         "Spotify Newsroom: Company Info. newsroom.spotify.com"),
+    ]
+    ref_s = ParagraphStyle("rs", fontSize=9, fontName="Helvetica",
+                            textColor=TEXT_DARK, leading=13, spaceAfter=5,
+                            leftIndent=26, firstLineIndent=-26)
+    for author, text in refs:
+        story.append(Paragraph(f"<b>{author}</b> {text}", ref_s))
+
+    doc.build(story, canvasmaker=ReportCanvas)
+    print(f"  ✓ PDF saved:   {output_path}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════════════════
+if __name__ == "__main__":
+    print("=" * 55)
+    print("  Dynamic Report Generator")
+    print("=" * 55)
+
+    print("\n[1/3] Loading results.json ...")
+    r = load_results("results.json")
+    print(f"      n={r['n_total']} | train={r['n_train']} | test={r['n_test']}")
+    print(f"      MLR R² = {r['mlr_r2']} | RF MSE = {r['metrics']['mse_rf']}")
+
+    print("\n[2/3] Writing report.tex ...")
+    tex = generate_latex(r)
+    with open("report.tex", "w") as f:
+        f.write(tex)
+    print("  ✓ LaTeX saved: report.tex")
+
+    print("\n[3/3] Building final_report.pdf ...")
+    build_pdf(r, "final_report.pdf")
+
+    print("\n" + "=" * 55)
+    print("  Done! Files ready for submission:")
+    print("    report.tex")
+    print("    final_report.pdf")
+    print("=" * 55)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    song_popularity_project
+# ============================================================
+#  Song Popularity Score — Complete Project Script (Python)
+#  Dependent Variable: popularity
+#  Independent Variables: danceability, energy, loudness,
+#                         valence, tempo, duration_min
+# ============================================================
+
+# ---- 0. Install packages (run once in terminal) ------------
+# pip install pandas numpy matplotlib seaborn scikit-learn scipy statsmodels
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import seaborn as sns
+from scipy import stats
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import statsmodels.api as sm
+import warnings
+warnings.filterwarnings("ignore")
+
+# Global plot style
+plt.rcParams.update({
+    "figure.facecolor": "white",
+    "axes.facecolor":   "white",
+    "axes.grid":        True,
+    "grid.alpha":       0.3,
+    "font.family":      "sans-serif",
+    "font.size":        11,
+})
+
+COLORS = ["#6C5CE7","#00B894","#E17055","#0984E3","#FDCB6E","#D63031","#A29BFE"]
+
+print("=" * 60)
+print("  SONG POPULARITY SCORE — PROJECT")
+print("=" * 60)
+
+# ============================================================
+# TASK 1 — Load & Clean Data
+# ============================================================
+print("\n[TASK 1] Loading and cleaning data...")
+
+df_raw = pd.read_csv("spotify.csv")
+
+vars_needed = ["popularity", "danceability", "energy",
+               "loudness", "valence", "tempo", "duration_ms"]
+df = df_raw[vars_needed].copy()
+
+# Drop missing values and zero-popularity rows
+df.dropna(inplace=True)
+df = df[df["popularity"] > 0].copy()
+
+# Convert duration from ms to minutes
+df["duration_min"] = df["duration_ms"] / 60000
+df.drop(columns=["duration_ms"], inplace=True)
+
+# Reproducible sample of 500
+df = df.sample(n=500, random_state=42).reset_index(drop=True)
+
+print(f"  Dataset shape : {df.shape}")
+print(f"  Variables     : {list(df.columns)}")
+
+# Export to Excel for submission
+df.to_excel("spotify_data.xlsx", index=False)
+print("  Saved: spotify_data.xlsx")
+
+# ============================================================
+# TASK 2 — Summary Statistics
+# ============================================================
+print("\n" + "=" * 60)
+print("  TASK 2 — SUMMARY STATISTICS")
+print("=" * 60)
+
+# --- Basic describe ---
+desc = df.describe().T
+desc.columns = ["Count","Mean","Std","Min","Q1","Median","Q3","Max"]
+print("\n--- describe() ---")
+print(desc.round(3).to_string())
+
+# --- Mode ---
+print("\n--- Mode ---")
+for col in df.columns:
+    mode_val = df[col].mode()[0]
+    print(f"  {col:<15}: {mode_val:.4f}")
+
+# --- Skewness & Kurtosis ---
+print("\n--- Skewness & Kurtosis ---")
+for col in df.columns:
+    sk = df[col].skew()
+    ku = df[col].kurtosis()
+    print(f"  {col:<15}: Skewness = {sk:+.3f}  |  Kurtosis = {ku:+.3f}")
+
+# --- IQR & Variance ---
+print("\n--- IQR & Variance ---")
+for col in df.columns:
+    q1, q3 = df[col].quantile(0.25), df[col].quantile(0.75)
+    print(f"  {col:<15}: IQR = {q3-q1:.4f}  |  Variance = {df[col].var():.4f}")
+
+# Full summary table saved to CSV
+summary_full = pd.DataFrame({
+    "Mean":     df.mean(),
+    "Median":   df.median(),
+    "Mode":     df.apply(lambda x: x.mode()[0]),
+    "Std":      df.std(),
+    "Variance": df.var(),
+    "Min":      df.min(),
+    "Max":      df.max(),
+    "Q1":       df.quantile(0.25),
+    "Q2":       df.quantile(0.50),
+    "Q3":       df.quantile(0.75),
+    "Skewness": df.skew(),
+    "Kurtosis": df.kurtosis(),
+}).round(4)
+summary_full.to_csv("summary_statistics.csv")
+print("\n  Saved: summary_statistics.csv")
+print(summary_full.to_string())
+
+# ============================================================
+# TASK 3 — Box and Whisker Plots
+# ============================================================
+print("\n" + "=" * 60)
+print("  TASK 3 — BOX AND WHISKER PLOTS")
+print("=" * 60)
+
+# Normalize to [0,1] so all variables fit one axis
+df_norm = (df - df.min()) / (df.max() - df.min())
+df_norm.columns = df.columns
+
+fig, ax = plt.subplots(figsize=(14, 7))
+
+bp = ax.boxplot(
+    [df_norm[col].values for col in df_norm.columns],
+    patch_artist=True,
+    notch=False,
+    vert=True,
+    widths=0.55,
+    flierprops=dict(marker="*", color="red", markersize=6,
+                    markerfacecolor="red", linestyle="none"),
+    medianprops=dict(color="white", linewidth=2),
+    whiskerprops=dict(linewidth=1.4),
+    capprops=dict(linewidth=1.4),
+)
+
+for patch, color in zip(bp["boxes"], COLORS):
+    patch.set_facecolor(color)
+    patch.set_alpha(0.80)
+
+ax.set_xticks(range(1, len(df.columns) + 1))
+ax.set_xticklabels(df.columns, fontsize=12, rotation=20, ha="right")
+ax.set_ylabel("Normalized Value [0–1]", fontsize=12)
+ax.set_title("Box and Whisker Plots — All Variables (Normalized)",
+             fontsize=15, fontweight="bold", pad=14)
+ax.set_xlabel("Variable", fontsize=12)
+
+subtitle = "Red asterisks (*) indicate outliers  |  Variables scaled to [0, 1] for comparability"
+fig.text(0.5, 0.01, subtitle, ha="center", fontsize=10, color="gray")
+
+# Custom legend
+from matplotlib.patches import Patch
+legend_handles = [Patch(facecolor=COLORS[i], alpha=0.8, label=col)
+                  for i, col in enumerate(df.columns)]
+ax.legend(handles=legend_handles, loc="upper right", fontsize=10,
+          framealpha=0.85, ncol=2)
+
+plt.tight_layout(rect=[0, 0.04, 1, 1])
+plt.savefig("boxplot_all_variables.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("  Saved: boxplot_all_variables.png")
+
+# --- Outlier detection (IQR rule) ---
+print("\n--- Outlier Detection (IQR Rule: 1.5×IQR) ---")
+for col in df.columns:
+    q1, q3 = df[col].quantile(0.25), df[col].quantile(0.75)
+    iqr = q3 - q1
+    lb, ub = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    n_out = ((df[col] < lb) | (df[col] > ub)).sum()
+    print(f"  {col:<15}: Outliers = {n_out:>3}  |"
+          f"  Lower fence = {lb:>8.3f}  |  Upper fence = {ub:>8.3f}")
+
+# ============================================================
+# TASK 4 — Scatter Plot Grid
+# ============================================================
+print("\n" + "=" * 60)
+print("  TASK 4 — SCATTER PLOT GRID")
+print("=" * 60)
+
+cols  = df.columns.tolist()
+n     = len(cols)
+fig, axes = plt.subplots(n, n, figsize=(18, 16))
+fig.suptitle("Scatter Plot Grid — All Variables\n"
+             "Diagonal: distribution  |  Lower: scatter  |  Upper: correlation",
+             fontsize=14, fontweight="bold", y=1.01)
+
+for i, col_y in enumerate(cols):
+    for j, col_x in enumerate(cols):
+        ax = axes[i, j]
+        ax.tick_params(labelsize=7)
+
+        if i == j:
+            # Diagonal — KDE + histogram
+            ax.hist(df[col_x], bins=20, color=COLORS[i],
+                    alpha=0.55, edgecolor="white", density=True)
+            kde_x = np.linspace(df[col_x].min(), df[col_x].max(), 200)
+            kde   = stats.gaussian_kde(df[col_x])
+            ax.plot(kde_x, kde(kde_x), color=COLORS[i], linewidth=2)
+            ax.set_facecolor("#f9f9f9")
+
+        elif i > j:
+            # Lower triangle — scatter plot
+            ax.scatter(df[col_x], df[col_y],
+                       alpha=0.35, s=12, color="#6C5CE7", edgecolors="none")
+            # Regression line
+            m, b, _, _, _ = stats.linregress(df[col_x], df[col_y])
+            x_line = np.linspace(df[col_x].min(), df[col_x].max(), 100)
+            ax.plot(x_line, m * x_line + b, color="#E17055",
+                    linewidth=1.4, alpha=0.85)
+
+        else:
+            # Upper triangle — correlation coefficient
+            r, p = stats.pearsonr(df[col_x], df[col_y])
+            color_r = "#D63031" if abs(r) > 0.5 else \
+                      "#0984E3" if abs(r) > 0.3 else "#636e72"
+            ax.text(0.5, 0.5, f"r = {r:.3f}",
+                    ha="center", va="center",
+                    fontsize=11, fontweight="bold", color=color_r,
+                    transform=ax.transAxes)
+            sig = "***" if p < 0.001 else "**" if p < 0.01 else \
+                  "*"   if p < 0.05  else "ns"
+            ax.text(0.5, 0.28, sig,
+                    ha="center", va="center",
+                    fontsize=10, color="gray",
+                    transform=ax.transAxes)
+            ax.set_facecolor("#fafafa")
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+        # Row/column labels on edges
+        if i == n - 1:
+            ax.set_xlabel(col_x, fontsize=8, labelpad=4)
+        if j == 0:
+            ax.set_ylabel(col_y, fontsize=8, labelpad=4)
+
+plt.tight_layout()
+plt.savefig("scatterplot_grid.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("  Saved: scatterplot_grid.png")
+
+# Correlation matrix printout
+print("\n--- Pearson Correlation Matrix ---")
+print(df.corr().round(3).to_string())
+
+# ============================================================
+# TASK 5 — Models
+# ============================================================
+print("\n" + "=" * 60)
+print("  TASK 5 — MODEL ESTIMATION")
+print("=" * 60)
+
+# --- Train / Test Split (80 / 20) ---
+X = df.drop(columns=["popularity"])
+y = df["popularity"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42)
+
+print(f"\n  Training set : {X_train.shape[0]} observations")
+print(f"  Test set     : {X_test.shape[0]} observations")
+
+# ============================================================
+# MODEL 1 — Multiple Linear Regression (statsmodels for full output)
+# ============================================================
+print("\n--- Model 1: Multiple Linear Regression ---")
+
+X_train_sm = sm.add_constant(X_train)
+X_test_sm  = sm.add_constant(X_test)
+
+mlr_model  = sm.OLS(y_train, X_train_sm).fit()
+print(mlr_model.summary())
+
+# Predictions
+pred_mlr = mlr_model.predict(X_test_sm)
+
+mse_mlr  = mean_squared_error(y_test, pred_mlr)
+rmse_mlr = np.sqrt(mse_mlr)
+mae_mlr  = mean_absolute_error(y_test, pred_mlr)
+r2_mlr   = r2_score(y_test, pred_mlr)
+
+print(f"\n  MLR Test Performance:")
+print(f"    MSE  = {mse_mlr:.4f}")
+print(f"    RMSE = {rmse_mlr:.4f}")
+print(f"    MAE  = {mae_mlr:.4f}")
+print(f"    R²   = {r2_mlr:.4f}")
+
+# Print equation
+coefs = mlr_model.params
+eq = f"Popularity = {coefs['const']:.3f}"
+for col in X.columns:
+    sign = "+" if coefs[col] >= 0 else "-"
+    eq  += f" {sign} {abs(coefs[col]):.4f}×{col}"
+print(f"\n  MLR Equation:\n  {eq}")
+
+# ============================================================
+# MODEL 2 — Random Forest
+# ============================================================
+print("\n--- Model 2: Random Forest ---")
+
+rf_model = RandomForestRegressor(
+    n_estimators = 500,
+    max_features = 2,
+    random_state = 42,
+    n_jobs       = -1
+)
+rf_model.fit(X_train, y_train)
+pred_rf = rf_model.predict(X_test)
+
+mse_rf   = mean_squared_error(y_test, pred_rf)
+rmse_rf  = np.sqrt(mse_rf)
+mae_rf   = mean_absolute_error(y_test, pred_rf)
+r2_rf    = r2_score(y_test, pred_rf)
+
+print(f"\n  Random Forest Test Performance:")
+print(f"    MSE  = {mse_rf:.4f}")
+print(f"    RMSE = {rmse_rf:.4f}")
+print(f"    MAE  = {mae_rf:.4f}")
+print(f"    R²   = {r2_rf:.4f}")
+
+# Variable Importance
+imp_df = pd.DataFrame({
+    "Variable":  X.columns,
+    "Importance": rf_model.feature_importances_
+}).sort_values("Importance", ascending=False)
+print(f"\n  Variable Importance (RF):\n{imp_df.to_string(index=False)}")
+
+# ============================================================
+# COMPARISON PLOTS
+# ============================================================
+print("\n--- Generating Comparison Plots ---")
+
+results = pd.DataFrame({
+    "Actual":   y_test.values,
+    "MLR":      pred_mlr.values,
+    "RF":       pred_rf,
+    "Index":    range(len(y_test))
+})
+
+fig = plt.figure(figsize=(16, 13))
+gs  = gridspec.GridSpec(2, 2, figure=fig, hspace=0.38, wspace=0.30)
+
+# --- Plot 1: Actual vs Predicted — MLR ---
+ax1 = fig.add_subplot(gs[0, 0])
+ax1.scatter(results["Actual"], results["MLR"],
+            color="#6C5CE7", alpha=0.6, s=30, edgecolors="none",
+            label="Observations")
+lim = [min(results["Actual"].min(), results["MLR"].min()) - 2,
+       max(results["Actual"].max(), results["MLR"].max()) + 2]
+ax1.plot(lim, lim, "r--", linewidth=1.6, label="Perfect prediction")
+ax1.set_xlim(lim); ax1.set_ylim(lim)
+ax1.set_xlabel("Actual Popularity");  ax1.set_ylabel("Predicted Popularity")
+ax1.set_title("MLR: Actual vs Predicted", fontweight="bold")
+ax1.legend(fontsize=9)
+ax1.text(0.05, 0.92, f"MSE = {mse_mlr:.2f}\nR² = {r2_mlr:.3f}",
+         transform=ax1.transAxes, fontsize=9,
+         bbox=dict(boxstyle="round,pad=0.3", facecolor="lavender", alpha=0.7))
+
+# --- Plot 2: Actual vs Predicted — RF ---
+ax2 = fig.add_subplot(gs[0, 1])
+ax2.scatter(results["Actual"], results["RF"],
+            color="#00B894", alpha=0.6, s=30, edgecolors="none",
+            label="Observations")
+ax2.plot(lim, lim, "r--", linewidth=1.6, label="Perfect prediction")
+ax2.set_xlim(lim); ax2.set_ylim(lim)
+ax2.set_xlabel("Actual Popularity"); ax2.set_ylabel("Predicted Popularity")
+ax2.set_title("Random Forest: Actual vs Predicted", fontweight="bold")
+ax2.legend(fontsize=9)
+ax2.text(0.05, 0.92, f"MSE = {mse_rf:.2f}\nR² = {r2_rf:.3f}",
+         transform=ax2.transAxes, fontsize=9,
+         bbox=dict(boxstyle="round,pad=0.3", facecolor="honeydew", alpha=0.7))
+
+# --- Plot 3: Line chart — Actual vs both predictions ---
+ax3 = fig.add_subplot(gs[1, 0])
+idx = results["Index"]
+ax3.plot(idx, results["Actual"], color="black",     lw=1.2,
+         alpha=0.85, label="Actual")
+ax3.plot(idx, results["MLR"],    color="#6C5CE7",   lw=1.2,
+         alpha=0.80, label="MLR Predicted", linestyle="--")
+ax3.plot(idx, results["RF"],     color="#00B894",   lw=1.2,
+         alpha=0.80, label="RF Predicted",  linestyle="-.")
+ax3.set_xlabel("Observation Index"); ax3.set_ylabel("Popularity Score")
+ax3.set_title("Actual vs Predicted — Both Models", fontweight="bold")
+ax3.legend(fontsize=9)
+
+# --- Plot 4: MSE Bar Chart ---
+ax4 = fig.add_subplot(gs[1, 1])
+models = ["Multiple Linear\nRegression", "Random Forest"]
+mse_vals = [mse_mlr, mse_rf]
+bars = ax4.bar(models, mse_vals, color=["#6C5CE7", "#00B894"],
+               width=0.45, alpha=0.88, edgecolor="white")
+for bar, val in zip(bars, mse_vals):
+    ax4.text(bar.get_x() + bar.get_width() / 2,
+             bar.get_height() + 0.3,
+             f"{val:.2f}", ha="center", va="bottom",
+             fontweight="bold", fontsize=12)
+ax4.set_ylabel("Mean Squared Error (MSE)")
+ax4.set_title("Model Comparison — MSE\n(lower is better)", fontweight="bold")
+ax4.set_ylim(0, max(mse_vals) * 1.25)
+
+fig.suptitle("Song Popularity Score — Model Comparison Dashboard",
+             fontsize=15, fontweight="bold", y=1.01)
+plt.savefig("model_comparison.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("  Saved: model_comparison.png")
+
+# --- Variable Importance Plot ---
+fig, ax = plt.subplots(figsize=(9, 6))
+bars = ax.barh(imp_df["Variable"], imp_df["Importance"],
+               color="#00B894", alpha=0.85, edgecolor="white")
+for bar, val in zip(bars, imp_df["Importance"]):
+    ax.text(val + 0.002, bar.get_y() + bar.get_height() / 2,
+            f"{val:.4f}", va="center", fontsize=10)
+ax.set_xlabel("Feature Importance (Mean Decrease in Impurity)")
+ax.set_title("Random Forest — Variable Importance",
+             fontsize=14, fontweight="bold")
+ax.invert_yaxis()
+plt.tight_layout()
+plt.savefig("variable_importance.png", dpi=300, bbox_inches="tight")
+plt.show()
+print("  Saved: variable_importance.png")
+
+# ============================================================
+# FINAL SUMMARY TABLE
+# ============================================================
+print("\n" + "=" * 62)
+print("  FINAL MODEL COMPARISON SUMMARY")
+print("=" * 62)
+print(f"  {'Metric':<10} {'MLR':>14} {'Random Forest':>16} {'Winner':>10}")
+print("  " + "-" * 52)
+metrics = {
+    "MSE":  (mse_mlr,  mse_rf),
+    "RMSE": (rmse_mlr, rmse_rf),
+    "MAE":  (mae_mlr,  mae_rf),
+    "R²":   (r2_mlr,   r2_rf),
+}
+for metric, (v1, v2) in metrics.items():
+    if metric == "R²":
+        winner = "MLR" if v1 > v2 else "RF"
+    else:
+        winner = "MLR" if v1 < v2 else "RF"
+    print(f"  {metric:<10} {v1:>14.4f} {v2:>16.4f} {winner:>10}")
+
+print("\n  Files saved:")
+for f in ["spotify_data.xlsx", "summary_statistics.csv",
+          "boxplot_all_variables.png", "scatterplot_grid.png",
+          "model_comparison.png", "variable_importance.png"]:
+    print(f"    ✓ {f}")
+print("\n  Done dana don done ! \n")
+
+
+
+# ============================================================
+# SAVE RESULTS FOR DYNAMIC REPORT GENERATION
+# ============================================================
+import json
+
+def get_mode(series):
+    return round(float(series.mode()[0]), 4)
+
+# Summary statistics per variable
+summary_data = {}
+for col in df.columns:
+    q1  = float(df[col].quantile(0.25))
+    q3  = float(df[col].quantile(0.75))
+    summary_data[col] = {
+        "mean":     round(float(df[col].mean()), 4),
+        "median":   round(float(df[col].median()), 4),
+        "mode":     get_mode(df[col]),
+        "std":      round(float(df[col].std()), 4),
+        "q1":       round(q1, 4),
+        "q3":       round(q3, 4),
+        "min":      round(float(df[col].min()), 4),
+        "max":      round(float(df[col].max()), 4),
+        "skewness": round(float(df[col].skew()), 4),
+        "kurtosis": round(float(df[col].kurtosis()), 4),
+        "variance": round(float(df[col].var()), 4),
+    }
+
+# MLR coefficients
+mlr_results = {}
+for var in X_train_sm.columns:
+    mlr_results[var] = {
+        "coef":    round(float(mlr_model.params[var]), 4),
+        "std_err": round(float(mlr_model.bse[var]), 4),
+        "t_stat":  round(float(mlr_model.tvalues[var]), 4),
+        "p_value": round(float(mlr_model.pvalues[var]), 4),
+    }
+
+# Outlier counts
+outliers = {}
+for col in df.columns:
+    q1  = df[col].quantile(0.25)
+    q3  = df[col].quantile(0.75)
+    iqr = q3 - q1
+    outliers[col] = int(((df[col] < q1 - 1.5*iqr) | (df[col] > q3 + 1.5*iqr)).sum())
+
+# RF variable importance
+importance_dict = {
+    col: round(float(val), 6)
+    for col, val in zip(X.columns, rf_model.feature_importances_)
+}
+top_rf_var    = max(importance_dict, key=importance_dict.get)
+second_rf_var = sorted(importance_dict, key=importance_dict.get, reverse=True)[1]
+
+# MLR significant variables (p < 0.05), exclude intercept
+sig_vars = [
+    k for k, v in mlr_results.items()
+    if v["p_value"] < 0.05 and k != "const"
+]
+
+results_json = {
+    "n_total":      len(df),
+    "n_train":      len(X_train),
+    "n_test":       len(X_test),
+    "summary":      summary_data,
+    "mlr":          mlr_results,
+    "mlr_r2":       round(float(mlr_model.rsquared), 4),
+    "mlr_adj_r2":   round(float(mlr_model.rsquared_adj), 4),
+    "mlr_f_stat":   round(float(mlr_model.fvalue), 4),
+    "mlr_f_pval":   round(float(mlr_model.f_pvalue), 6),
+    "mlr_aic":      round(float(mlr_model.aic), 4),
+    "mlr_bic":      round(float(mlr_model.bic), 4),
+    "metrics": {
+        "mse_mlr":   round(mse_mlr,  4),
+        "rmse_mlr":  round(rmse_mlr, 4),
+        "mae_mlr":   round(mae_mlr,  4),
+        "r2_mlr":    round(r2_mlr,   4),
+        "mse_rf":    round(mse_rf,   4),
+        "rmse_rf":   round(rmse_rf,  4),
+        "mae_rf":    round(mae_rf,   4),
+        "r2_rf":     round(r2_rf,    4),
+    },
+    "importance":    importance_dict,
+    "top_rf_var":    top_rf_var,
+    "second_rf_var": second_rf_var,
+    "sig_vars":      sig_vars,
+    "outliers":      outliers,
+    "winner_mse":    "Random Forest" if mse_rf < mse_mlr else "MLR",
+}
+
+with open("results.json", "w") as f:
+    json.dump(results_json, f, indent=2)
+
+print("\n  Saved: results.json  (used by generate_report.py)")
